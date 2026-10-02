@@ -67,10 +67,15 @@ const call = async <T>(cmd: string, args?: Record<string, unknown>): Promise<T> 
   } catch (e) {
     if (isValidationError(e)) throw new CommandError(e.toAppError());
     const raw = e as { code?: string; message?: string; retryable?: boolean };
+    // A raw internal message must never reach the user. Anything that is not a
+    // structured native error — including a missing IPC bridge — becomes plain text.
+    const code = typeof raw.code === 'string' && raw.code.length > 0 ? raw.code : undefined;
     throw new CommandError({
-      code: raw.code ?? 'store_unavailable',
-      message: raw.message ?? 'That action could not finish. Your saved work is safe.',
-      retryable: raw.retryable ?? true,
+      code: code ?? 'store_unavailable',
+      message: code
+        ? String(raw.message ?? 'That action could not finish.')
+        : 'Local storage is unavailable. This action only works inside the desktop app.',
+      retryable: code ? (raw.retryable ?? true) : false,
     });
   }
 };
