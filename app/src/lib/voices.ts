@@ -3,9 +3,22 @@
 // upstream OpenAI-style names. Gender and accent come from that table too, so a British
 // id is never labelled American.
 //
-// P2-01 finding: the package ships 17 voices, and **9 of the 9 en-us voices are male**.
-// There is no US female voice at all. British is the only region with both genders
-// (4 male, 4 female). Any plan that assumed a US male/female pair cannot be satisfied.
+// P2-01 findings from the installed package (node_modules/kokoro-js/dist/kokoro.js):
+//
+// 1. 17 voices ship: 9 American (ALL male) and 8 British (4 male, 4 female). There is
+//    no American female voice, so a US male/female pair is impossible with this model.
+//
+// 2. Voice weights are fetched PER VOICE from
+//    https://huggingface.co/onnx-community/Kokoro-82M-v1.0-ONNX/resolve/main/voices/<id>.bin
+//    — one request per distinct voice, not one bundle. Using 17 voices means 17 fetches.
+//
+// 3. The same code path prefers a LOCAL file when a `readFile` capability is injected:
+//    it resolves `../voices/<id>.bin` relative to the module and skips the network
+//    entirely. That is the offline route: place the .bin files in that directory and
+//    inject readFile. No fetch monkey-patching is required.
+//
+// Voice count therefore has a direct cost: every id used must be installed locally.
+// This table deliberately keeps the used set small (4 pairs + 4 monologues + narrator).
 
 export type Accent = 'British' | 'American';
 export type VoiceGender = 'Male' | 'Female';
