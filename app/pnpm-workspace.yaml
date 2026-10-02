@@ -1,0 +1,9 @@
+# pnpm 11 blocks installs whose dependencies have unapproved build scripts.
+# kokoro-js pulls onnxruntime-node/protobufjs/sharp, which are only needed for
+# local TTS (Phase 2/P4). Phase 0 does not execute kokoro, so refuse the builds
+# rather than run native postinstall for an unused path. Revisit at P2-02, where
+# the offline audio gate decides whether they are actually required.
+allowBuilds:
+  onnxruntime-node: false
+  protobufjs: false
+  sharp: false

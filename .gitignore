@@ -52,3 +52,5 @@ Thumbs.db
 .idea/
 .vscode/
 *.swp
+# Tauri build output
+app/src-tauri/target/

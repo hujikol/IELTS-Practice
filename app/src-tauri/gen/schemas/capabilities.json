@@ -1,0 +1,1 @@
+{"default":{"identifier":"default","description":"Minimum capability set. No shell, no generic filesystem access: every path is resolved and written by native code, never by the renderer.","local":true,"windows":["main"],"permissions":["core:default"]}}
