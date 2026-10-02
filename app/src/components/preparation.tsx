@@ -20,7 +20,12 @@ const SCOPES: { value: Scope; label: string; part: number }[] = [
 
 const GENERATION_META = { provider: 'manual-copy-paste', model: 'external-chat', createdAt: Date.now() };
 
-export function Preparation() {
+export function Preparation({
+  onOpenPractice,
+}: {
+  /** Optional: when supplied, a material-complete draft offers a Start button (P3-01). */
+  onOpenPractice?: (attempt: AttemptRecord) => void;
+} = {}) {
   const [summaries, setSummaries] = useState<AttemptSummary[]>([]);
   const [record, setRecord] = useState<AttemptRecord | null>(null);
   const [selectedJob, setSelectedJob] = useState<string>('');
@@ -239,6 +244,9 @@ export function Preparation() {
         Test <code>{record.id.slice(0, 8)}</code> · revision {record.revision} · {record.status} ·{' '}
         {prepared.length}/{jobs.length} prepared{complete ? ' · ready to start' : ''}
       </p>
+      {complete && onOpenPractice && (
+        <button onClick={() => onOpenPractice(record)}>Start this test</button>
+      )}
 
       <h2>1. Choose a part</h2>
       <ul style={{ listStyle: 'none', padding: 0, display: 'flex', flexWrap: 'wrap', gap: 8 }}>

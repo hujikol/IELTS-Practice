@@ -33,7 +33,9 @@ Rust available; Tauri CLI `2.12.0` installed as a dev dependency.
 | P1-06 | **partial** | `src/components/preparation.tsx` — one screen: draft creation, job list with prepared state, copy prompt / rotate, paste, validate, answer-bearing preview, replace confirmation, repair-request copy. No player, model or provider dependencies. |
 | P3-02 | **verified by coordinator** | `src/lib/session.ts` (691 lines) + 35 tests, all passing. Spot-checked rather than trusted: `buildPatch` **throws** on any non-allowlisted key instead of silently dropping it, so a patch cannot carry material/prepared/status. `Timer` clamps persisted state to the budget, never resumes in a running state, floors seconds (rounding could grant time), and rejects a backwards wall clock. `applyPatch` clones rather than mutating. Full TS suite: 346 tests green. |
 | P3-03 | **verified by coordinator** | Timer checkpointing at 5s, foreground-only decrement, recovery paused at the last durable value. Crash policy is the documented §18.4 compromise (at most one checkpoint interval lost), marked with a `ponytail:` comment. |
-| P1-07 | delegated | Export/restore handed to the native-layer agent. |
+| P1-07 | **verified by coordinator** | `src-tauri/src/backup.rs` (1282 lines): versioned manifest, per-file SHA-256 implemented in std and **pinned to the four FIPS vectors** so a wrong digest cannot pass, §18.3 limits enforced from directory metadata before any read, validate-everything-before-write restore, colliding ids rejected unless explicitly replaced, credentials/models/audio-cache never included. No zip crate is permitted, so the container is a single JSON file with base64 payloads — a deliberate deviation that costs compression and inflates a 256 MiB WAV to ~341 MiB in memory. |
+| P3-01 | **verified by coordinator** | `src-tauri/src/lifecycle.rs` (987 lines): start refuses incomplete material naming the missing keys, full-scope start requires declared audio readiness, session token minted at start, `save_patch` enforces its allowlist natively *before opening a write* and refuses a `timer` smuggled through the data blob. **Added 5 tests the agent omitted for `clamp_remaining`** — the invariant that a renderer can lose time but never gain it was implemented but unverified. |
+| P3-06 | **verified by coordinator** | `delete_attempt` cascades to `imports/<id>` and `recordings/<id>` only, requires explicit confirmation, and cannot reach `models/` or `audio-cache/`. |
 | P2-01 | **verified, with a finding that changes the plan** | `src/lib/voices.ts` + `tests/voices.test.ts` (11 tests) parse the **installed** kokoro-js package and pin every voice id, gender and accent to it. The package ships 17 voices: 9 American (**all male**) and 8 British (4M/4F). **There is no American female voice.** Only British can form a male/female dialogue pair, so all four dialogue sets are British. Seeded resolution guarantees P1≠P3 and a stable retry. |
 | P1-08 | **harness ready, trials not run** | `src/lib/trials.ts` + `tests/trials.test.ts` (10 tests): renders the real prompt per job, validates a real pasted response, records outcome with its error code, enforces the 2-repair budget, and renders a **redacted** evidence file that never contains model content. The gate deliberately reports NOT ready until every trial is imported **and** human-reviewed. **The trials themselves still need a human** to paste into a real chat. |
 | P0-07 | **verified** | **127 tests, all passing**: 4 contract + 24 parser + 20 guide + 8 guide↔material consistency + 71 material §6 matrix. `tests/guide-contract.test.ts` fails if prompt text drifts from the validation contract (§5.2). Runner confirmed on bare Node 24, no transform step. |
@@ -44,7 +46,7 @@ Rust available; Tauri CLI `2.12.0` installed as a dev dependency.
 $ pnpm typecheck   # tsc -b --noEmit --incremental false
 PASS
 $ pnpm test        # node --test tests/*.test.ts
-PASS  (300 tests, 0 fail)
+PASS  (346 tests, 0 fail)
 $ pnpm lint        # eslint src tests
 PASS
 $ pnpm build       # tsc -b && vite build
@@ -67,8 +69,8 @@ $ cargo fmt --manifest-path src-tauri/Cargo.toml
 $ cargo fmt --manifest-path src-tauri/Cargo.toml -- --check     # clean
 $ cargo clippy --manifest-path src-tauri/Cargo.toml --all-targets -- -D warnings
 Finished (0 warnings)
-$ cargo test --manifest-path src-tauri/Cargo.toml --lib
-test result: ok. 10 passed; 0 failed; finished in 0.08s
+$ cargo test --manifest-path src-tauri/Cargo.toml
+48 unit + 9 integration, all passing  (clamp tests added by coordinator)
 
 ## Blockers and decisions
 
