@@ -1,9 +1,10 @@
 use tauri::Manager;
 
-mod commands;
-mod store;
+pub mod commands;
+pub mod store;
 
-pub use store::{Attempt, AttemptSummary, Store, StoreError};
+pub use commands::{commit_import_inner, create_attempt_inner, issue_request_inner};
+pub use store::{Attempt, AttemptSummary, ImportRef, JobRequest, Store, StoreError};
 
 /// Prevents a second launch from racing the first for the same store file (§8.2).
 fn single_instance() -> tauri::plugin::TauriPlugin<tauri::Wry> {

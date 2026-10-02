@@ -20,7 +20,7 @@ Rust available; Tauri CLI `2.12.0` installed as a dev dependency.
 | Task | State | Evidence |
 |---|---|---|
 | P0-01 | **verified** | Inventory above. Scaffold present: `package.json`, lockfile, Vite/TS config, `src/lib/types.ts`. Missing at start: `main.tsx`, `App.tsx`, `eslint.config.mjs`, `src-tauri/`, `docs/`, all `tests/`, all `src/lib/{material,import,guide}.ts`. |
-| P0-02 | **partial** | Vite entrypoint + React mount + ESLint flat config added. Tauri scaffold created (`Cargo.toml`, `tauri.conf.json`, `capabilities/default.json`, icon) and `cargo build` succeeds. **Native window not yet launched interactively**, and macOS bundling is blocked: only CommandLineTools are installed, not full Xcode. |
+| P0-02 | **verified** | Vite entrypoint + React mount + ESLint flat config. Tauri scaffold created and **`pnpm tauri dev` launched a real window** (`Running target/debug/ielts-studio`, process stable). Two drafts were created by clicking in the live UI and persisted to `~/Library/Application Support/local.ielts.studio/attempts.json` with its backup alongside — native assigned both UUIDs and `owner_id: local`, and all nine full-scope jobs are present. macOS *bundling* is still blocked: only CommandLineTools, not full Xcode. |
 | P0-03 | **verified** | `src/lib/types.ts` extended: `RawMaterial` family separated from normalized types, nullable `SectionResult.band` (zero placeholder removed), 60-member `ErrorCode`, `ValidationError`, versioned `JobRequest`/`ImportRef`, `ImportHistoryEntry`, typed `VoiceMap` (no `unknown`), §18.2 command payloads. `tests/contract.test.ts` asserts nullable bands and error codes. |
 | P0-04 | **verified** | `src/lib/material.ts` (839 lines) written by coordinator after the subagent died. Full §6 contract: shape validation, block/Writing/Speaking semantics, transport-neutral `requirements()`, `emptyTest` with explicit generation metadata, single `applyMaterial`. 61 tests in `tests/material.test.ts`, one rule broken at a time, each asserting its ErrorCode. |
 | P0-05 | **verified** | `src/lib/import.ts` (350 lines) landed before its agent died. Bounded scanner enforces depth 32 during parse, decoded-key duplicate detection, `__proto__`/`constructor`/`prototype` rejection at every level, exact raw/fenced grammar, 1 MiB cap. `tests/parser.test.ts` (24 tests) written by coordinator — the agent shipped **zero** tests for it. |
@@ -32,7 +32,7 @@ Rust available; Tauri CLI `2.12.0` installed as a dev dependency.
 | P1-05 | **partial** | Duplicate no-op and replacement confirmation are implemented on both sides; the confirm UI is in `preparation.tsx`. |
 | P1-06 | **partial** | `src/components/preparation.tsx` — one screen: draft creation, job list with prepared state, copy prompt / rotate, paste, validate, answer-bearing preview, replace confirmation, repair-request copy. No player, model or provider dependencies. |
 | P1-07 | not started | Export/restore |
-| P1-08 | **not started** | §9.1 real external-chat trials. **Cannot be run by the agent** — it requires a human to paste into a real chat and paste the result back. |
+| P1-08 | **harness ready, trials not run** | `src/lib/trials.ts` + `tests/trials.test.ts` (10 tests): renders the real prompt per job, validates a real pasted response, records outcome with its error code, enforces the 2-repair budget, and renders a **redacted** evidence file that never contains model content. The gate deliberately reports NOT ready until every trial is imported **and** human-reviewed. **The trials themselves still need a human** to paste into a real chat. |
 | P0-07 | **verified** | **127 tests, all passing**: 4 contract + 24 parser + 20 guide + 8 guide↔material consistency + 71 material §6 matrix. `tests/guide-contract.test.ts` fails if prompt text drifts from the validation contract (§5.2). Runner confirmed on bare Node 24, no transform step. |
 
 ## Command evidence
@@ -41,7 +41,7 @@ Rust available; Tauri CLI `2.12.0` installed as a dev dependency.
 $ pnpm typecheck   # tsc -b --noEmit --incremental false
 PASS
 $ pnpm test        # node --test tests/*.test.ts
-PASS  (218 tests, 0 fail)
+PASS  (300 tests, 0 fail)
 $ pnpm lint        # eslint src tests
 PASS
 $ pnpm build       # tsc -b && vite build
@@ -49,6 +49,12 @@ PASS  dist/assets/index-*.js 190.68 kB │ gzip: 60.10 kB
 ```
 
 ```
+$ pnpm tauri dev
+Running BeforeDevCommand (`pnpm dev`)   -> VITE ready, http://localhost:5173/
+Running DevCommand (`cargo run --no-default-features`)
+Finished `dev` profile in 9.69s
+Running `target/debug/ielts-studio`      <-- real window, process stable
+
 $ cargo build --manifest-path src-tauri/Cargo.toml
 Finished `dev` profile [unoptimized + debuginfo] target(s)
 $ cargo fmt --manifest-path src-tauri/Cargo.toml

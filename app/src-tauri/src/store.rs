@@ -344,6 +344,9 @@ impl Store {
         store.attempts.get(id).cloned().ok_or(StoreError::NotFound)
     }
 
+    /// `id` is honoured as given. Callers that must not let the renderer choose an id
+    /// assign one natively first (see `create_attempt`); this layer stays dumb so
+    /// tests and migrations can pin a known id.
     pub fn create(&self, attempt: Attempt) -> Result<Attempt, StoreError> {
         let _held = self
             .guard

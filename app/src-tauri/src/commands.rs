@@ -119,16 +119,21 @@ fn require_preparing(attempt: &Attempt) -> Result<(), StoreError> {
 
 // ─── Commands ───
 
+/// Identity and ownership are assigned here, natively, so a renderer cannot choose an
+/// id or claim another owner. The store stays dumb so tests and migrations can pin a
+/// known id. Split out so the integration tests exercise this exact rule.
+pub fn create_attempt_inner(store: &Store, mut attempt: Attempt) -> Result<Attempt, StoreError> {
+    attempt.id = uuid();
+    attempt.owner_id = "local".into();
+    store.create(attempt)
+}
+
 #[tauri::command]
 pub fn create_attempt(
     state: tauri::State<'_, AppState>,
     args: CreateAttemptArgs,
 ) -> CmdResult<Attempt> {
-    let mut attempt = args.attempt;
-    // Ownership and identity are assigned natively; a renderer cannot claim another owner.
-    attempt.id = uuid();
-    attempt.owner_id = "local".into();
-    Ok(state.store.create(attempt)?)
+    Ok(create_attempt_inner(&state.store, args.attempt)?)
 }
 
 #[tauri::command]
@@ -148,64 +153,91 @@ pub fn delete_attempt(state: tauri::State<'_, AppState>, attempt_id: String) -> 
 
 /// §4.2 the first issue persists a generation id and a snapshot of the rendered brief.
 /// Repeated copying reuses both; only an explicit rotate replaces them.
-#[tauri::command]
-pub fn issue_request(
-    state: tauri::State<'_, AppState>,
-    args: IssueRequestArgs,
-) -> CmdResult<IssuedRequest> {
-    let store = state.store.clone();
-    let job_key = args.job_key.clone();
-    let rotate = args.rotate;
-    let snapshot = args.snapshot.clone();
-    let contract_version = args.contract_version;
-
-    let updated = store.commit(&args.attempt_id, args.expected_revision, |attempt| {
+/// §4.2 issue/reuse a generation request. Split from the Tauri wrapper so the
+/// integration tests exercise this exact code rather than a reimplementation.
+pub fn issue_request_inner(
+    store: &Store,
+    attempt_id: &str,
+    expected_revision: i64,
+    job_key: &str,
+    rotate: bool,
+    snapshot: &str,
+    contract_version: i64,
+) -> Result<(JobRequest, i64), StoreError> {
+    let updated = store.commit(attempt_id, expected_revision, |attempt| {
         require_preparing(attempt)?;
         // Copy and repair reuse the issued request; only an explicit rotate replaces it.
-        if !rotate && attempt.requests.contains_key(&job_key) {
+        if !rotate && attempt.requests.contains_key(job_key) {
             return Ok(());
         }
         attempt.requests.insert(
-            job_key.clone(),
+            job_key.to_string(),
             JobRequest {
                 generation_id: uuid(),
                 issued_at: now_ms(),
-                snapshot: snapshot.clone(),
+                snapshot: snapshot.to_string(),
                 contract_version,
                 envelope_version: 1,
             },
         );
         Ok(())
     })?;
+    let request = updated
+        .requests
+        .get(job_key)
+        .cloned()
+        .ok_or(StoreError::NotFound)?;
+    Ok((request, updated.revision))
+}
 
-    let request = updated.requests.get(&job_key).ok_or(StoreError::NotFound)?;
+#[tauri::command]
+pub fn issue_request(
+    state: tauri::State<'_, AppState>,
+    args: IssueRequestArgs,
+) -> CmdResult<IssuedRequest> {
+    let (request, revision) = issue_request_inner(
+        &state.store,
+        &args.attempt_id,
+        args.expected_revision,
+        &args.job_key,
+        args.rotate,
+        &args.snapshot,
+        args.contract_version,
+    )?;
     Ok(IssuedRequest {
-        generation_id: request.generation_id.clone(),
-        snapshot: request.snapshot.clone(),
-        rotated: rotate,
-        revision: updated.revision,
+        generation_id: request.generation_id,
+        snapshot: request.snapshot,
+        rotated: args.rotate,
+        revision,
     })
 }
 
 /// §7.2 native re-checks target identity, lifecycle and generation before committing.
 /// Material content was already validated in the bundled app; native never trusts it
-/// enough to skip the revision and identity checks.
-#[tauri::command]
-pub fn commit_import(state: tauri::State<'_, AppState>, args: CommitArgs) -> CmdResult<Attempt> {
-    let store = state.store.clone();
-    let job_key = args.job_key.clone();
-    let generation_id = args.generation_id.clone();
-    let sha256 = args.sha256.clone();
-    let contract_version = args.contract_version;
-    let data = args.data.clone();
-    let raw_original = args.raw_original.clone();
-    let replace_confirmed = args.replace_confirmed;
+/// enough to skip the revision and identity checks. Split from the Tauri wrapper so
+/// integration tests exercise this exact code.
+#[allow(clippy::too_many_arguments)]
+pub fn commit_import_inner(
+    store: &Store,
+    attempt_id: &str,
+    expected_revision: i64,
+    job_key: &str,
+    generation_id: &str,
+    data: serde_json::Value,
+    sha256: &str,
+    contract_version: i64,
+    raw_original: &str,
+    replace_confirmed: bool,
+) -> Result<Attempt, StoreError> {
+    let job_key = job_key.to_string();
+    let generation_id = generation_id.to_string();
+    let sha256 = sha256.to_string();
+    let data = data.clone();
+    let raw_original = raw_original.to_string();
 
-    // Asset first: a metadata failure then leaves an orphan, never a dangling reference.
-    let original_path = format!("imports/{}/{}/original.json", args.attempt_id, job_key);
-    store.write_asset(&original_path, raw_original.as_bytes())?;
-
-    let updated = store.commit(&args.attempt_id, args.expected_revision, |attempt| {
+    // The asset is written inside the commit closure, per accepted checksum, so a
+    // metadata failure leaves an orphan rather than a reference to missing data.
+    let updated = store.commit(attempt_id, expected_revision, |attempt| {
         require_preparing(attempt)?;
 
         let request = attempt.requests.get(&job_key).ok_or(StoreError::NotFound)?;
@@ -229,23 +261,27 @@ pub fn commit_import(state: tauri::State<'_, AppState>, args: CommitArgs) -> Cmd
             return Err(StoreError::Lifecycle);
         }
 
-        // Replacement appends to history; it never deletes the previous original.
-        if let Some(previous) = attempt.imports.get(&job_key).cloned() {
-            let entry = ImportHistoryEntry {
-                sha256: previous.sha256,
-                accepted_at: previous.accepted_at,
-                original_path: previous.original_path,
-                generation_id: previous.generation_id,
-                contract_version: previous.contract_version,
-                envelope_version: previous.envelope_version,
-                superseded_at: Some(now_ms()),
-            };
-            attempt
-                .import_history
-                .entry(job_key.clone())
-                .or_default()
-                .push(entry);
+        // Replacement marks the outgoing entry superseded in place and appends the new
+        // one. Re-pushing the previous entry instead would log it twice, because the
+        // current entry is already recorded below.
+        if attempt.imports.contains_key(&job_key) {
+            if let Some(history) = attempt.import_history.get_mut(&job_key) {
+                if let Some(current) = history.iter_mut().rev().find(|e| e.superseded_at.is_none())
+                {
+                    current.superseded_at = Some(now_ms());
+                }
+            }
         }
+
+        // BUG 2: the original was always written to imports/<id>/<job>/original.json, so a
+        // replacement OVERWROTE the superseded original on disk and the audit history
+        // pointed at a file whose contents had changed. Each accepted generation gets
+        // its own directory, keyed by checksum.
+        let original_path = format!(
+            "imports/{attempt_id}/{job_key}/{}/original.json",
+            &sha256[..sha256.len().min(16)]
+        );
+        store.write_asset(&original_path, raw_original.as_bytes())?;
 
         let reference = ImportRef {
             sha256: sha256.clone(),
@@ -285,4 +321,20 @@ pub fn commit_import(state: tauri::State<'_, AppState>, args: CommitArgs) -> Cmd
     })?;
 
     Ok(updated)
+}
+
+#[tauri::command]
+pub fn commit_import(state: tauri::State<'_, AppState>, args: CommitArgs) -> CmdResult<Attempt> {
+    Ok(commit_import_inner(
+        &state.store,
+        &args.attempt_id,
+        args.expected_revision,
+        &args.job_key,
+        &args.generation_id,
+        args.data,
+        &args.sha256,
+        args.contract_version,
+        &args.raw_original,
+        args.replace_confirmed,
+    )?)
 }
