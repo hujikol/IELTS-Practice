@@ -28,14 +28,49 @@ pub enum StoreError {
     NotFound,
     #[error("revision conflict")]
     Conflict,
-    #[error("lifecycle does not allow this change")]
-    Lifecycle,
+    /// §18.2 a path outside the store root, or an absolute/traversing asset name.
+    #[error("unsafe path: {0}")]
+    UnsafePath(String),
     #[error("io error: {0}")]
     Io(String),
     /// §7.3 an identical envelope for the same accepted generation is a no-op. It gets
     /// its own variant so the UI can treat it as success, not as a failure to retry.
     #[error("identical material was already accepted")]
     Duplicate,
+
+    // ─── Lifecycle (§8.3) ───
+    // One variant per illegal transition. A single shared "lifecycle" code cannot tell
+    // the UI whether to reload a draft, re-open a session, or refuse a stale preview.
+    #[error("attempt is not in preparation")]
+    NotPreparing,
+    #[error("attempt is not active")]
+    NotActive,
+    #[error("material is incomplete: {0}")]
+    MaterialIncomplete(String),
+    #[error("audio is not ready: {0}")]
+    AudioNotReady(String),
+    #[error("patch key is not allowed: {0}")]
+    PatchRejected(String),
+    /// A caller argument is out of range or internally inconsistent.
+    #[error("invalid argument: {0}")]
+    InvalidArgument(String),
+    #[error("replacement was not confirmed")]
+    ReplacementNotConfirmed,
+    /// §18.1 deletion must be explicitly confirmed by the caller.
+    #[error("deletion was not confirmed")]
+    NotConfirmed,
+
+    // ─── Archive (§8.4 / §18.3) ───
+    /// `limit` is a stable token (`max_wav_bytes`, …) and `detail` is the human sentence.
+    /// They are separate fields so the UI can branch on the token without parsing prose.
+    #[error("archive limit exceeded: {limit}: {detail}")]
+    LimitExceeded { limit: String, detail: String },
+    #[error("archive checksum mismatch: {0}")]
+    ChecksumMismatch(String),
+    #[error("invalid archive: {0}")]
+    ArchiveInvalid(String),
+    #[error("archive collides with stored attempts: {0}")]
+    ArchiveCollision(String),
 }
 
 impl StoreError {
@@ -48,15 +83,48 @@ impl StoreError {
             Self::UnsupportedVersion(_) => "store_version_unsupported",
             Self::NotFound => "not_found",
             Self::Conflict => "revision_conflict",
-            Self::Lifecycle => "not_preparing",
+            Self::UnsafePath(_) => "unsafe_path",
             Self::Io(_) => "store_unavailable",
             Self::Duplicate => "duplicate",
+            Self::NotPreparing => "not_preparing",
+            Self::NotActive => "not_active",
+            Self::MaterialIncomplete(_) => "material_incomplete",
+            Self::AudioNotReady(_) => "audio_not_ready",
+            Self::PatchRejected(_) => "patch_key_not_allowed",
+            Self::InvalidArgument(_) => "invalid_argument",
+            Self::ReplacementNotConfirmed => "replacement_not_confirmed",
+            Self::NotConfirmed => "not_confirmed",
+            Self::LimitExceeded { .. } => "limit_exceeded",
+            Self::ChecksumMismatch(_) => "checksum_mismatch",
+            Self::ArchiveInvalid(_) => "archive_invalid",
+            Self::ArchiveCollision(_) => "archive_collision",
         }
     }
 
     /// A duplicate is not retryable and not an error to surface as one.
     pub fn retryable(&self) -> bool {
         matches!(self, Self::NoSpace | Self::Io(_))
+    }
+
+    /// §18.3 "Large restores report the offending limit". The limit name is a stable
+    /// token (`max_attempts`, `max_wav_bytes`, …) so the UI can explain the refusal
+    /// without parsing the human-readable detail out of the message.
+    pub fn limit_name(&self) -> Option<&str> {
+        match self {
+            Self::LimitExceeded { limit, .. } => Some(limit),
+            _ => None,
+        }
+    }
+}
+
+impl StoreError {
+    /// Build a limit refusal. `detail` is the human sentence; the limit token is what
+    /// code branches on.
+    pub fn limit(name: &str, detail: String) -> Self {
+        Self::LimitExceeded {
+            limit: name.to_string(),
+            detail,
+        }
     }
 }
 
@@ -107,6 +175,18 @@ pub struct JobRequest {
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
+pub struct TimerState {
+    /// §18.4 "Prevent reopening or wall-clock rollback from adding time." A resume may
+    /// lower `remaining_ms` but never raise it above this persisted checkpoint.
+    pub remaining_ms: i64,
+    pub running: bool,
+    /// Native wall-clock ms of the last durable checkpoint. Used only to bound how much
+    /// time a crash can lose (§18.4), never to add time.
+    pub checkpoint_ms: i64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
 pub struct Attempt {
     pub id: String,
     pub owner_id: String,
@@ -128,10 +208,49 @@ pub struct Attempt {
     pub voice_map: Option<serde_json::Value>,
 }
 
+/// §8.3/§18.2/§18.4 native-owned session state, persisted beside the attempt rather
+/// than inside it.
+///
+/// `Attempt` is the app-owned record that `src/lib/types.ts` mirrors field for field, so
+/// adding a field to it would silently drift from that type. Lifecycle state is written
+/// only by `start`/`pause`/`resume`/`finish`, never by a patch, which is precisely the
+/// separation that keeps material and lifecycle from being settable through one payload.
+#[derive(Debug, Clone, Default, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub struct AttemptLifecycle {
+    /// Written once by `start_attempt`; a later command must never rewrite it.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub started_at: Option<i64>,
+    /// Written once by `finish_attempt`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub finished_at: Option<i64>,
+    /// §18.2 session token. A window from a previous session cannot act on a re-opened
+    /// attempt because it does not know the token minted at start.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub session_id: Option<String>,
+    /// §8.3 "required audio readiness". The renderer declares it after verifying clips
+    /// and a complete model installation; `start_attempt` reads this and never assumes
+    /// readiness from the caller's word alone.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub audio_ready: Option<bool>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub timer: Option<TimerState>,
+}
+
+impl Attempt {
+    pub fn is(&self, status: &str) -> bool {
+        self.status == status
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 pub struct StoreFile {
     pub store_version: u32,
     pub attempts: BTreeMap<String, Attempt>,
+    /// Native session state, keyed by attempt id. Absent from older stores and skipped
+    /// on write when empty, so a draft written before this field still loads.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub lifecycle: BTreeMap<String, AttemptLifecycle>,
 }
 
 impl StoreFile {
@@ -139,6 +258,7 @@ impl StoreFile {
         Self {
             store_version: STORE_VERSION,
             attempts: BTreeMap::new(),
+            lifecycle: BTreeMap::new(),
         }
     }
 }
@@ -344,6 +464,53 @@ impl Store {
         store.attempts.get(id).cloned().ok_or(StoreError::NotFound)
     }
 
+    /// Native session state for one attempt. An attempt with no lifecycle entry yet is
+    /// still a valid `preparing` draft, so absence is not an error.
+    pub fn lifecycle_of(&self, id: &str) -> Result<AttemptLifecycle, StoreError> {
+        let store = self.load()?;
+        if !store.attempts.contains_key(id) {
+            return Err(StoreError::NotFound);
+        }
+        Ok(store.lifecycle.get(id).cloned().unwrap_or_default())
+    }
+
+    /// §18.1 every modifying command re-checks the expected revision. This variant also
+    /// hands the closure the attempt's native lifecycle block, so lifecycle writes and
+    /// the revision bump land in ONE atomic store write rather than two files' worth of
+    /// half-applied state.
+    pub fn commit_with_lifecycle(
+        &self,
+        id: &str,
+        expected_revision: i64,
+        mutate: impl FnOnce(&mut Attempt, &mut AttemptLifecycle) -> Result<(), StoreError>,
+    ) -> Result<Attempt, StoreError> {
+        let _held = self.lock()?;
+        let mut store = self.read_unlocked()?;
+        // NotFound is checked BEFORE the revision, so a missing id is never reported as
+        // a conflict: the UI would show "someone else changed it" for a deleted draft.
+        if !store.attempts.contains_key(id) {
+            return Err(StoreError::NotFound);
+        }
+        if store.attempts.get(id).map(|r| r.revision) != Some(expected_revision) {
+            return Err(StoreError::Conflict);
+        }
+        // Split borrow: the closure needs the attempt and the lifecycle entry, which
+        // live in two different maps of the same struct.
+        let StoreFile {
+            attempts,
+            lifecycle,
+            ..
+        } = &mut store;
+        let record = attempts.get_mut(id).ok_or(StoreError::NotFound)?;
+        let entry = lifecycle.entry(id.to_string()).or_default();
+        mutate(record, entry)?;
+        record.revision += 1;
+        record.updated_at = now_ms();
+        let out = record.clone();
+        self.persist(&store)?;
+        Ok(out)
+    }
+
     /// `id` is honoured as given. Callers that must not let the renderer choose an id
     /// assign one natively first (see `create_attempt`); this layer stays dumb so
     /// tests and migrations can pin a known id.
@@ -399,7 +566,111 @@ impl Store {
         if store.attempts.remove(id).is_none() {
             return Err(StoreError::NotFound);
         }
+        store.lifecycle.remove(id);
         self.persist(&store)
+    }
+
+    /// §8.4 cascade delete, serialized against every other write through the same
+    /// queue. Metadata is removed FIRST so a crash leaves orphan files (recoverable)
+    /// rather than a record pointing at deleted recordings.
+    ///
+    /// Only the two per-attempt subtrees are touched. `models/` and `audio-cache/` are
+    /// shared across attempts and are never reachable from an attempt id, so no code
+    /// path here can delete them.
+    pub fn delete_cascade(&self, id: &str, expected_revision: i64) -> Result<Attempt, StoreError> {
+        if !is_safe_id(id) {
+            return Err(StoreError::UnsafePath(id.to_string()));
+        }
+        let removed = {
+            let _held = self.lock()?;
+            let mut store = self.read_unlocked()?;
+            let record = store.attempts.get(id).ok_or(StoreError::NotFound)?;
+            if record.revision != expected_revision {
+                return Err(StoreError::Conflict);
+            }
+            let record = record.clone();
+            store.attempts.remove(id);
+            store.lifecycle.remove(id);
+            self.persist(&store)?;
+            record
+        };
+        for sub in ["imports", "recordings"] {
+            let dir = self.safe_join(&format!("{sub}/{id}"))?;
+            if dir.exists() {
+                fs::remove_dir_all(&dir).map_err(|e| classify(&e))?;
+            }
+        }
+        Ok(removed)
+    }
+
+    /// Replace several attempts in ONE atomic store write. §8.4 restore is
+    /// validate-all-before-activate: by the time this runs, every checksum, path and
+    /// limit has already been checked, so a partial history cannot be written.
+    ///
+    /// `replace` lists ids whose differing content the caller explicitly chose to
+    /// overwrite; a collision outside that list aborts the whole restore.
+    pub fn restore_attempts(
+        &self,
+        incoming: Vec<(Attempt, AttemptLifecycle)>,
+        replace: &[String],
+    ) -> Result<Vec<Attempt>, StoreError> {
+        let _held = self.lock()?;
+        let mut store = self.read_unlocked()?;
+        for (attempt, _) in &incoming {
+            if let Some(existing) = store.attempts.get(&attempt.id) {
+                let same = serde_json::to_vec(existing).ok() == serde_json::to_vec(attempt).ok();
+                if same {
+                    continue;
+                }
+                if !replace.contains(&attempt.id) {
+                    // §8.4 default restore preserves existing attempts.
+                    return Err(StoreError::ArchiveCollision(attempt.id.clone()));
+                }
+            }
+        }
+        let mut saved = Vec::with_capacity(incoming.len());
+        for (attempt, lifecycle) in incoming {
+            store.lifecycle.insert(attempt.id.clone(), lifecycle);
+            store.attempts.insert(attempt.id.clone(), attempt.clone());
+            saved.push(attempt);
+        }
+        self.persist(&store)?;
+        Ok(saved)
+    }
+
+    /// Every regular file under `relative`, as (store-relative path, size in bytes).
+    ///
+    /// Sizes come from directory metadata, not from reading the files, so a caller can
+    /// enforce a total-size ceiling BEFORE allocating a single payload (§18.3).
+    pub fn list_assets(&self, relative: &str) -> Result<Vec<(String, u64)>, StoreError> {
+        let root = self.safe_join(relative)?;
+        let mut out = Vec::new();
+        if !root.exists() {
+            return Ok(out);
+        }
+        let mut stack = vec![root];
+        while let Some(dir) = stack.pop() {
+            let entries = fs::read_dir(&dir).map_err(|e| classify(&e))?;
+            for entry in entries {
+                let entry = entry.map_err(|e| classify(&e))?;
+                let meta = entry.metadata().map_err(|e| classify(&e))?;
+                // `metadata` follows symlinks; a symlinked directory could otherwise
+                // walk the export out of the store root.
+                if meta.is_dir() {
+                    stack.push(entry.path());
+                } else if meta.is_file() {
+                    let name = entry
+                        .path()
+                        .strip_prefix(&self.root)
+                        .map_err(|_| StoreError::UnsafePath(relative.to_string()))?
+                        .to_string_lossy()
+                        .replace('\\', "/");
+                    out.push((name, meta.len()));
+                }
+            }
+        }
+        out.sort();
+        Ok(out)
     }
 
     /// §8.2 asset-first commit: the immutable original is synced before metadata
@@ -425,11 +696,34 @@ impl Store {
 
     /// Reject traversal and absolute paths. The renderer supplies only relative names.
     pub fn safe_join(&self, relative: &str) -> Result<PathBuf, StoreError> {
-        if relative.is_empty() || relative.starts_with('/') || relative.contains("..") {
-            return Err(StoreError::Io("unsafe path".into()));
+        if relative.is_empty()
+            || relative.starts_with('/')
+            || relative.contains('\\')
+            || relative.split('/').any(|c| c == ".." || c == ".")
+        {
+            return Err(StoreError::UnsafePath(relative.to_string()));
         }
         Ok(self.root.join(relative))
     }
+
+    pub fn root(&self) -> &Path {
+        &self.root
+    }
+}
+
+/// An attempt id is used as a path component, so it must be a single safe segment.
+/// Native ids are UUID-shaped, but this is checked rather than assumed: a hostile
+/// archive controls its own attempt ids.
+pub fn is_safe_id(id: &str) -> bool {
+    !id.is_empty()
+        && id.len() <= 128
+        && !id.contains('/')
+        && !id.contains('\\')
+        && !id.contains("..")
+        && !id.starts_with('.')
+        && id
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
 }
 
 #[cfg(test)]
@@ -492,7 +786,7 @@ mod tests {
         let store = Store::new(dir.path().to_path_buf());
         store.create(attempt("a1")).unwrap();
         let err = store
-            .commit("a1", 0, |_| Err(StoreError::Lifecycle))
+            .commit("a1", 0, |_| Err(StoreError::NotPreparing))
             .unwrap_err();
         assert_eq!(err.code(), "not_preparing");
         assert_eq!(store.load_attempt("a1").unwrap().revision, 0);

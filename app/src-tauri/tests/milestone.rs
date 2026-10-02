@@ -120,7 +120,7 @@ fn rotating_invalidates_only_its_own_job() {
     store.create(draft()).unwrap();
     let (l0, rev) = issue(&store, 0, "l0", false);
     let (r0, rev) = issue(&store, rev, "r0", false);
-    let (l0_new, _rev) = issue(&store, rev, "l0", true);
+    let (l0_new, _) = issue(&store, rev, "l0", true);
 
     assert_ne!(l0, l0_new);
     let after = store.load_attempt("a1").unwrap();
@@ -161,15 +161,22 @@ fn an_identical_import_is_a_no_op_and_a_different_one_needs_confirmation() {
     );
     assert_eq!(store.load_attempt("a1").unwrap().revision, rev);
 
-    // Different payload without confirmation is refused.
+    // A different payload without confirmation is refused with a code that says
+    // "confirm first". Returning not_preparing here would tell the UI to reload a
+    // perfectly healthy draft, which is misleading rather than merely wrong.
     assert_eq!(
         import(&store, rev, "l0", &gen, "sha-2", false)
             .unwrap_err()
             .code(),
-        "not_preparing"
+        "replacement_not_confirmed"
     );
     // With confirmation it lands.
-    let rev = import(&store, rev, "l0", &gen, "sha-2", true).unwrap();
+    let confirmed = import(&store, rev, "l0", &gen, "sha-2", true).unwrap();
+    // The confirmed replacement really did advance the revision and land the material.
+    assert!(
+        confirmed > rev,
+        "a confirmed replacement must bump the revision"
+    );
     assert_eq!(
         store.load_attempt("a1").unwrap().imports["l0"].sha256,
         "sha-2"

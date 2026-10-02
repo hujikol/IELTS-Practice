@@ -80,14 +80,14 @@ pub struct AppState {
 }
 
 /// §18.1 timestamps and ownership are generated here, never taken from model output.
-fn now_ms() -> i64 {
+pub(crate) fn now_ms() -> i64 {
     std::time::SystemTime::now()
         .duration_since(std::time::UNIX_EPOCH)
         .map(|d| d.as_millis() as i64)
         .unwrap_or(0)
 }
 
-fn uuid() -> String {
+pub(crate) fn uuid() -> String {
     // Random enough for local single-process identity; not a security boundary.
     let mut bytes = [0u8; 16];
     if let Ok(mut f) = std::fs::File::open("/dev/urandom") {
@@ -111,8 +111,8 @@ fn uuid() -> String {
 }
 
 fn require_preparing(attempt: &Attempt) -> Result<(), StoreError> {
-    if attempt.status != "preparing" {
-        return Err(StoreError::Lifecycle);
+    if !attempt.is("preparing") {
+        return Err(StoreError::NotPreparing);
     }
     Ok(())
 }
@@ -146,10 +146,9 @@ pub fn load_attempt(state: tauri::State<'_, AppState>, attempt_id: String) -> Cm
     Ok(state.store.load_attempt(&attempt_id)?)
 }
 
-#[tauri::command]
-pub fn delete_attempt(state: tauri::State<'_, AppState>, attempt_id: String) -> CmdResult<()> {
-    Ok(state.store.delete(&attempt_id)?)
-}
+// Deletion lives in `lifecycle::delete_attempt`, which cascades to the attempt's own
+// imports/ and recordings/ subtrees and requires confirmation. A metadata-only delete
+// here would silently orphan every recording the user made.
 
 /// §4.2 the first issue persists a generation id and a snapshot of the rendered brief.
 /// Repeated copying reuses both; only an explicit rotate replaces them.
@@ -258,7 +257,9 @@ pub fn commit_import_inner(
         }
 
         if attempt.imports.contains_key(&job_key) && !replace_confirmed {
-            return Err(StoreError::Lifecycle);
+            // §7.3 the attempt IS preparing, so reporting "not_preparing" here would
+            // send the UI to re-open a draft that is fine. This is its own failure.
+            return Err(StoreError::ReplacementNotConfirmed);
         }
 
         // Replacement marks the outgoing entry superseded in place and appends the new
