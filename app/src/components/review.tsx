@@ -6,6 +6,7 @@ import { useState, useEffect } from 'react';
 import type { FinalReport, WeaknessItem } from '../lib/scoring.ts';
 import type { AttemptRecord, TestData } from '../lib/types.ts';
 import { generateFinalReport } from '../lib/assessment-coordinator.ts';
+import { isWritingAttempted, isSpeakingAttempted } from '../lib/attempts.ts';
 import { Button } from './ui/button.tsx';
 
 interface ReviewProps {
@@ -78,8 +79,13 @@ export function Review({
     }
   };
 
-  const overallBand = report?.overall.band;
+  const writingAttempted = isWritingAttempted(attempt?.data || data);
+  const speakingAttempted = isSpeakingAttempted(attempt?.data || data);
   const modules = report?.modules;
+
+  const displayWritingBand = writingAttempted && modules?.writing?.band !== null && modules?.writing?.band !== undefined;
+  const displaySpeakingBand = speakingAttempted && modules?.speaking?.band !== null && modules?.speaking?.band !== undefined;
+  const overallBand = (writingAttempted && speakingAttempted) ? report?.overall.band : null;
   const weaknesses = report?.weakness_profile.weaknesses || [];
   const strengths = report?.weakness_profile.strengths || [];
   const plan = report?.weakness_profile.seven_day_plan || [];
@@ -194,22 +200,22 @@ export function Review({
           <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '10px', padding: '12px 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '12px', color: '#94a3b8' }}>Writing</span>
-              {modules?.writing?.band !== null && modules?.writing?.band !== undefined ? (
+              {displayWritingBand ? (
                 <span style={{ fontSize: '10px', color: '#38bdf8' }}>
-                  {modules.writing.confidence === 'low' ? 'Heuristic' : 'AI Scored'}
+                  {modules?.writing?.confidence === 'low' ? 'Heuristic' : 'AI Scored'}
                 </span>
               ) : (
                 <span style={{ fontSize: '10px', color: '#94a3b8' }}>Not Attempted</span>
               )}
             </div>
             <div style={{ fontSize: '20px', fontWeight: 800, color: '#f8fafc', marginTop: '2px' }}>
-              {modules?.writing?.band !== null && modules?.writing?.band !== undefined
+              {displayWritingBand && modules?.writing?.band !== null && modules?.writing?.band !== undefined
                 ? `Band ${modules.writing.band.toFixed(1)}`
                 : '—'}
             </div>
             <div style={{ fontSize: '11px', color: '#64748b' }}>
-              {modules?.writing?.band !== null && modules?.writing?.band !== undefined && modules.writing.task1 !== null && modules.writing.task2 !== null
-                ? `T1: ${modules.writing.task1?.toFixed(1) ?? '—'} | T2: ${modules.writing.task2?.toFixed(1) ?? '—'}`
+              {displayWritingBand && modules?.writing?.task1 !== null && modules?.writing?.task2 !== null
+                ? `T1: ${modules?.writing?.task1?.toFixed(1) ?? '—'} | T2: ${modules?.writing?.task2?.toFixed(1) ?? '—'}`
                 : 'No responses submitted'}
             </div>
           </div>
@@ -217,21 +223,21 @@ export function Review({
           <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '10px', padding: '12px 16px' }}>
             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
               <span style={{ fontSize: '12px', color: '#94a3b8' }}>Speaking</span>
-              {modules?.speaking?.band !== null && modules?.speaking?.band !== undefined ? (
+              {displaySpeakingBand ? (
                 <span style={{ fontSize: '10px', color: '#38bdf8' }}>
-                  {modules.speaking.confidence === 'low' ? 'Heuristic' : 'AI Scored'}
+                  {modules?.speaking?.confidence === 'low' ? 'Heuristic' : 'AI Scored'}
                 </span>
               ) : (
                 <span style={{ fontSize: '10px', color: '#94a3b8' }}>Not Attempted</span>
               )}
             </div>
             <div style={{ fontSize: '20px', fontWeight: 800, color: '#f8fafc', marginTop: '2px' }}>
-              {modules?.speaking?.band !== null && modules?.speaking?.band !== undefined
+              {displaySpeakingBand && modules?.speaking?.band !== null && modules?.speaking?.band !== undefined
                 ? `Band ${modules.speaking.band.toFixed(1)}`
                 : '—'}
             </div>
             <div style={{ fontSize: '11px', color: '#64748b' }}>
-              {modules?.speaking?.band !== null && modules?.speaking?.band !== undefined
+              {displaySpeakingBand
                 ? 'Fluency & Lexical Analysis'
                 : 'No recordings submitted'}
             </div>
@@ -240,8 +246,8 @@ export function Review({
       </section>
 
       {/* Optional Deep AI Diagnostic Banner */}
-      {((modules?.writing?.status === 'assessed' && report?.modules.writing && report.modules.writing.confidence === 'low') ||
-        (modules?.speaking?.status === 'assessed' && report?.modules.speaking && report.modules.speaking.confidence === 'low')) && (
+      {((writingAttempted && modules?.writing?.confidence === 'low') ||
+        (speakingAttempted && modules?.speaking?.confidence === 'low')) && (
         <div
           style={{
             display: 'flex',
@@ -572,7 +578,7 @@ export function Review({
       {/* ─── TAB 4: WRITING REVIEW ─── */}
       {activeTab === 'writing' && report && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {report.review.writing.tasks.length === 0 ? (
+          {!writingAttempted || report.review.writing.tasks.length === 0 ? (
             <div style={{ padding: '48px 24px', textAlign: 'center', backgroundColor: '#ffffff', borderRadius: 16, border: '1px solid #e2e8f0', color: '#64748b' }}>
               <div style={{ fontSize: '36px', marginBottom: '12px' }}>✍️</div>
               <h3 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '18px', fontWeight: 800 }}>Writing Section Not Attempted</h3>
@@ -659,7 +665,7 @@ export function Review({
       {/* ─── TAB 5: SPEAKING REVIEW ─── */}
       {activeTab === 'speaking' && report && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '24px' }}>
-          {report.review.speaking.parts.length === 0 ? (
+          {!speakingAttempted || report.review.speaking.parts.length === 0 ? (
             <div style={{ padding: '48px 24px', textAlign: 'center', backgroundColor: '#ffffff', borderRadius: 16, border: '1px solid #e2e8f0', color: '#64748b' }}>
               <div style={{ fontSize: '36px', marginBottom: '12px' }}>🗣</div>
               <h3 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '18px', fontWeight: 800 }}>Speaking Section Not Attempted</h3>

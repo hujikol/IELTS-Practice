@@ -109,11 +109,97 @@ const writeIndex = (ids: string[]): void => {
   setStorageItem(INDEX_KEY, JSON.stringify(ids));
 };
 
+export function isWritingAttempted(data?: TestData | null): boolean {
+  if (!data || !Array.isArray(data.texts)) return false;
+  return data.texts.some((t) => typeof t === 'string' && t.trim().length >= 15);
+}
+
+export function isSpeakingAttempted(data?: TestData | null): boolean {
+  if (!data) return false;
+  const hasTexts =
+    Array.isArray(data.speakingTexts) &&
+    data.speakingTexts.some((t) => typeof t === 'string' && t.trim().length >= 5);
+  const hasRecordings = Boolean(data.recordings && Object.keys(data.recordings).length > 0);
+  return hasTexts || hasRecordings;
+}
+
+export function sanitizeAttemptRecord(record: AttemptRecord): AttemptRecord {
+  if (!record.data) return record;
+
+  const writingAttempted = isWritingAttempted(record.data);
+  const speakingAttempted = isSpeakingAttempted(record.data);
+  let changed = false;
+
+  // Sanitize finalReport if present
+  if (record.data.finalReport) {
+    const report = record.data.finalReport;
+    if (report.modules) {
+      if (!writingAttempted && report.modules.writing?.band !== null) {
+        report.modules.writing = {
+          band: null,
+          task1: null,
+          task2: null,
+          confidence: 'low',
+          status: 'unattempted',
+        };
+        if (report.review?.writing) {
+          report.review.writing.tasks = [];
+        }
+        changed = true;
+      }
+      if (!speakingAttempted && report.modules.speaking?.band !== null) {
+        report.modules.speaking = {
+          band: null,
+          confidence: 'low',
+          status: 'unattempted',
+        };
+        if (report.review?.speaking) {
+          report.review.speaking.parts = [];
+        }
+        changed = true;
+      }
+    }
+
+    // Overall band cannot be computed if any module in a full test is unattempted
+    if ((!writingAttempted || !speakingAttempted) && report.overall?.band !== null) {
+      report.overall = {
+        band: null,
+        method: 'partial results (incomplete modules)',
+      };
+      changed = true;
+    }
+  }
+
+  // Sanitize record.data.result (legacy score) if present
+  if (record.data.result) {
+    if (!writingAttempted && record.data.result.writing) {
+      record.data.result.writing.band = null;
+    }
+    if (!speakingAttempted && record.data.result.speaking) {
+      record.data.result.speaking.band = null;
+    }
+    if (!writingAttempted || !speakingAttempted) {
+      record.data.result.overall = null;
+    }
+  }
+
+  if (changed) {
+    try {
+      writeRecord(record);
+    } catch {
+      // ignore in read-only or quota-limited contexts
+    }
+  }
+
+  return record;
+}
+
 const readRecord = (id: string): AttemptRecord | null => {
   const raw = getStorageItem(`${ATTEMPT_PREFIX}${id}`);
   if (!raw) return null;
   try {
-    return JSON.parse(raw) as AttemptRecord;
+    const parsed = JSON.parse(raw) as AttemptRecord;
+    return sanitizeAttemptRecord(parsed);
   } catch {
     return null;
   }
