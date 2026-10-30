@@ -208,7 +208,98 @@ function rulesSection(req: GuideRequirements): string {
       if (rule.note) lines.push(`  - ${rule.note}`);
     }
   }
+
+  // 4b. Module blueprint
+  lines.push('', ...blueprintForJob(req.job));
+
   return lines.join('\n');
+}
+
+function blueprintForJob(job: PrepJob): string[] {
+  if (job.section === 'listening') {
+    const partNum = job.part > 0 ? job.part : Number(job.key.slice(1)) + 1 || 1;
+    const lines = [
+      '### 4b. Module blueprint — Listening',
+      '',
+      'FORMAT: 4 sections x 10 questions = 40. Audio is played ONCE. Answer limits: "NO MORE THAN TWO WORDS AND/OR A NUMBER" unless stated.',
+    ];
+    if (partNum === 1) {
+      lines.push(
+        '- Part 1 (Q1-10): Social conversation, 2 speakers (booking, enquiry, registration). Form, note, or table completion. Include a worked example (Q0) already answered. Include spelled names, phone numbers, postcodes, dates, prices. Include at least one self-correction (e.g. "sorry, I mean Thursday").',
+      );
+    } else if (partNum === 2) {
+      lines.push(
+        '- Part 2 (Q11-20): Social monologue (tour, facility talk, event info). One map or plan labelling group (5 items, letters A-H) with visual_spec coordinates AND one multiple choice or matching group.',
+        '- Map orientation language: Use explicit bearings (north of, opposite, second turning on the left, at the end of the path) matching the visual_spec grid.',
+      );
+    } else if (partNum === 3) {
+      lines.push(
+        '- Part 3 (Q21-30): Academic discussion, 2-4 speakers (students + tutor). MCQ (A/B/C or choose TWO), matching opinions to speakers, flowchart or sentence completion. Speakers disagree and change minds.',
+      );
+    } else {
+      lines.push(
+        '- Part 4 (Q31-40): University lecture, 1 speaker, continuous: dense note or summary completion, 10 gaps. Clear signposting language without reading question stems aloud.',
+      );
+    }
+    lines.push(
+      '- Narration events: Every section begins with the narrator announcing section number and context, then a 30-second prep pause for questions 1 to 5. Questions 6 to 10 have a 30-second pause. Section concludes with: "That is the end of Section N. You now have half a minute to check your answers." (30s pause). End of Section 4 adds: "That is the end of the recording. You now have two minutes to check your answers."',
+      '- Spoken content: Contains every answer verbatim in question order. Natural speech features (fillers, corrections, hesitation, full spoken figures).',
+    );
+    return lines;
+  }
+
+  if (job.section === 'reading') {
+    return [
+      '### 4b. Module blueprint — Reading',
+      '',
+      'FORMAT: 3 passages, 40 questions total (R1: 13, R2: 13, R3: 14), 60 min. Total 2,150-2,750 words; each passage 700-950 words, paragraphs labelled A, B, C...',
+      '- Passage 1: Descriptive/factual, accessible academic register.',
+      '- Passage 2: Work/study/technical process with explanatory depth.',
+      '- Passage 3: Discursive, argumentative, abstract vocabulary, evaluating writer views and claims.',
+      '- Group Variety: 2-3 distinct groups per passage from: True/False/Not Given (facts), Yes/No/Not Given (writer views), matching headings, matching information to paragraphs, matching features, sentence endings, MCQ (single or choose TWO), summary/note/flowchart completion, short answers.',
+      '- Rules: TFNG/YNNG items appear in strict passage order; NOT GIVEN must be genuinely absent (not contradicted, not merely hinted); gap answers 1-3 words, exact verbatim substrings.',
+    ];
+  }
+
+  if (job.section === 'writing') {
+    return [
+      '### 4b. Module blueprint — Writing',
+      '',
+      'TASK 1 (min 150 words, 20 min): Structured visual specification.',
+      '- Types: line_graph, bar_chart, pie_charts, table, mixed_chart_table, process, map_comparison.',
+      '- Visual spec: Real, internally consistent data (units, categories, time series). Charts feature 2-4 series with crossovers or peaks. Maps feature two comparative states (e.g. 1995 vs present) on the same grid with compass bearings and 4-8 changes.',
+      '- Rubric prompt: "The chart/map/diagram below shows... Summarise the information by selecting and reporting the main features, and make comparisons where relevant."',
+      '- Include key_features and a band-9 model answer (~170-190 words).',
+      '',
+      'TASK 2 (min 250 words, 40 min): Academic essay prompt.',
+      '- Types: opinion, discussion with opinion, advantages and disadvantages, problem and solution, two-part question.',
+      '- Include contextual prompt, essay outline, and a band-9 model answer (~270 words) addressing Task Response, Coherence & Cohesion, Lexical Resource, and Grammatical Range & Accuracy.',
+    ];
+  }
+
+  return [
+    '### 4b. Module blueprint — Speaking',
+    '',
+    '- Part 1 (4-5 min): 3 topic frames (frame 1 work/study/home/hometown; frames 2-3 familiar topics). 3-4 short questions per frame; past/present/future and why/why not variety.',
+    '- Part 2 (3-4 min): One cue card in official layout ("Describe a... You should say: what, where, when, and explain why..."). 1 min prep, 1-2 min speaking, rounding-off questions, and band 7 & 9 outlines.',
+    '- Part 3 (4-5 min): 4-6 abstract, analytical questions thematically linked to Part 2 (society-level, past vs present, evaluation).',
+    '- Examiner script: Include exact examiner transition phrasing.',
+    '- Optional practice extension: Picture description drill using image search keywords in visual_spec (never direct web addresses).',
+  ];
+}
+
+function validatorContractSection(): string {
+  return [
+    '## 6b. Validator contract',
+    '',
+    'Your output is evaluated by deterministic code-level validators before acceptance:',
+    '- Word count bounds and passage length windows are machine-verified.',
+    '- Question counts per group and section are verified against exact integer requirements.',
+    '- Every gap answer and evidence quote is checked by exact verbatim substring search in the source passage/script.',
+    '- Visual specifications are verified for mathematical rectangularity, coordinate consistency, and matching data.',
+    '- Multiple choice options and index boundaries are strictly verified.',
+    '- Any envelope violating identity, schema, or contract rules is refused outright.',
+  ].join('\n');
 }
 
 function schemaSection(schema: JsonSchema): string {
@@ -255,6 +346,7 @@ export function renderGuide(req: GuideRequirements, identity: GuideIdentity): st
     rulesSection(req),
     schemaSection(envelopeSchema(req, identity)),
     selfCheckSection(req),
+    validatorContractSection(),
   ].join('\n\n');
 }
 
@@ -288,8 +380,28 @@ export function renderRepair(input: RepairInput): string {
     `- code: \`${input.error.code}\``,
     `- path: \`${input.error.path ?? '(whole envelope)'}\``,
     `- message: ${input.error.message}`,
+  );
+
+  if (input.error.code === 'passage_length') {
+    lines.push(
+      '',
+      '> **CORRECTION REQUIRED FOR PASSAGE LENGTH**:',
+      `> ${input.error.message}`,
+      '> You must adjust and condense the passage text so it is strictly between 720 and 910 words (aim for ~800 words).',
+      '> Retain all essential context and evidence necessary to answer each question unambiguously.',
+    );
+  } else if (input.error.code === 'recording_length') {
+    lines.push(
+      '',
+      '> **CORRECTION REQUIRED FOR SCRIPT LENGTH**:',
+      `> ${input.error.message}`,
+      '> You must adjust the spoken script so it is strictly between 620 and 950 words (aim for ~750 words).',
+    );
+  }
+
+  lines.push(
     '',
-    'This is the first rejection. Fix every cause of this failure, and re-check the whole',
+    'This is the rejection details. Fix every cause of this failure, and re-check the whole',
     'envelope against the requirements below rather than editing only the reported field.',
   );
 

@@ -8,8 +8,7 @@
 //     checkpoint. Nothing else — no material, ids, owner, lifecycle or prepared state.
 //  2. Time only ever decreases, and never by more than what the app itself observed.
 
-import { invoke } from '@tauri-apps/api/core';
-import { CommandError } from './attempts.ts';
+import { CommandError, finishAttempt, savePatch } from './attempts.ts';
 import { isValidationError, type Result, type TestData } from './types.ts';
 
 export const PATCH_KEYS = [
@@ -382,12 +381,9 @@ export type SessionOptions = {
   onFinish?: (data: TestData, result: Result | null) => void;
 };
 
-/** §18.2 `save_patch`. Native merges allowed fields only and rechecks the revision. */
+/** §18.2 `save_patch`. Merges allowed fields only and rechecks the revision. */
 export const nativeTransport: Transport = async (patch, revision, attemptId) => {
-  const raw = (await invoke('save_patch', { args: { attemptId, expectedRevision: revision, patch } })) as
-    | { revision?: number; data?: TestData }
-    | null
-    | undefined;
+  const raw = await savePatch({ attemptId, expectedRevision: revision, patch });
   if (!raw || typeof raw.revision !== 'number') {
     throw new CommandError({
       code: 'store_unavailable',
@@ -572,10 +568,7 @@ export class Session {
       this.enqueue({ timer: this.timer.checkpoint(Date.now()) });
     }
     await this.flush();
-    const raw = (await invoke('finish_attempt', { args: { attemptId: this.id, expectedRevision: this.currentRevision } })) as
-      | { revision?: number; data?: TestData }
-      | null
-      | undefined;
+    const raw = await finishAttempt({ attemptId: this.id, expectedRevision: this.currentRevision });
     if (!raw || typeof raw.revision !== 'number' || !raw.data) {
       throw new CommandError({
         code: 'store_unavailable',

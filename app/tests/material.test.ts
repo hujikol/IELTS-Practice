@@ -145,6 +145,29 @@ test('validateShape accepts a complete raw block and rejects a missing key', () 
   assert.equal(code(() => validateShape(missing, rawBlockSchema, 'data')), 'missing_key');
 });
 
+test('validateShape accepts a raw block when optional description is omitted', () => {
+  const withoutDesc = listeningBlock() as unknown as Record<string, unknown>;
+  delete withoutDesc.description;
+  assert.doesNotThrow(() => validateShape(withoutDesc, rawBlockSchema, 'data'));
+});
+
+test('applyMaterial accepts a listening block without description and defaults to title', () => {
+  const block = listeningBlock();
+  delete block.description;
+  const t = applyMaterial(draft(), job('l0', 'listening', 1), block);
+  assert.equal(t.listening[0]?.title, 'Community centre booking');
+  assert.equal(t.listening[0]?.description, 'Community centre booking');
+});
+
+test('applyMaterial automatically synchronizes text for listening when raw text differs from script join', () => {
+  const block = listeningBlock();
+  block.text = 'A drift in model generated text that does not match script';
+  assert.doesNotThrow(() => {
+    const t = applyMaterial(draft(), job('l0', 'listening', 1), block);
+    assert.equal(t.listening[0]?.text, block.script.map((l) => l.text).join(' '));
+  });
+});
+
 test('validateShape rejects an unknown key rather than ignoring it', () => {
   const extra = { ...(readingBlock() as unknown as Record<string, unknown>), notes: 'hello' };
   assert.equal(code(() => validateShape(extra, rawBlockSchema, 'data')), 'unknown_key');

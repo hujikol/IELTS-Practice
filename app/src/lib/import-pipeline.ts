@@ -44,6 +44,10 @@ export async function stageImport(
   try {
     envelope = parseEnvelopeInput(rawInput);
   } catch (e) {
+    console.debug('[IELTS Studio] JSON Envelope Parse Error:', {
+      error: e,
+      rawInputPreview: typeof rawInput === 'string' ? rawInput.slice(0, 300) : '[binary]',
+    });
     if (e instanceof ValidationError) throw failure(e.code, e.message, e.path);
     throw failure('parse_failed', 'That response could not be read as JSON.');
   }
@@ -51,13 +55,25 @@ export async function stageImport(
   // §4.1 identity must equal the UI-selected attempt, job and CURRENT generation.
   // Membership in jobs alone is not enough — another valid job must also be refused.
   if (envelope.attempt_id !== target.attemptId) {
+    console.debug('[IELTS Studio] Mismatched attempt_id in envelope:', {
+      expected: target.attemptId,
+      received: envelope.attempt_id,
+    });
     throw failure('wrong_attempt', 'This response belongs to a different test. Copy the prompt again from this screen.');
   }
   if (envelope.generation_id !== target.generationId) {
+    console.debug('[IELTS Studio] Stale generation_id in envelope:', {
+      expected: target.generationId,
+      received: envelope.generation_id,
+    });
     throw failure('stale_generation', 'This response answers an earlier prompt. Issue a new generation request and paste the new result.');
   }
   const job = jobOf(test, envelope.job_key);
   if (!job) {
+    console.debug('[IELTS Studio] Unknown job_key in envelope:', {
+      received: envelope.job_key,
+      availableJobs: test.jobs?.map((j) => j.key),
+    });
     throw failure('unknown_job', `"${envelope.job_key}" is not one of this test's jobs.`);
   }
 
@@ -66,6 +82,10 @@ export async function stageImport(
   try {
     next = applyMaterial(test, job, envelope.data);
   } catch (e) {
+    console.debug('[IELTS Studio] Material Schema Validation Error:', {
+      job: job.key,
+      error: e,
+    });
     if (e instanceof ValidationError) throw failure(e.code, e.message, e.path);
     throw failure('parse_failed', 'That material could not be validated.');
   }

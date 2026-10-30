@@ -6,4 +6,7 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: { port: 5173, strictPort: true },
+  define: {
+    'process.env.EXPLABS_API_KEY': JSON.stringify(process.env.EXPLABS_API_KEY || ''),
+  },
 });

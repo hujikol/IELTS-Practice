@@ -54,3 +54,11 @@ Thumbs.db
 *.swp
 # Tauri build output
 app/src-tauri/target/
+
+# Agent skills and local configurations
+.agents/
+_agents/
+.agent/
+_agent/
+.taste-skill/
+

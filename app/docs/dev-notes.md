@@ -1,0 +1,9 @@
+1. change the generate button to queued when hitting the generate for all section button
+2. add a background execution for the test generation so if backing into the dasboard or navigating to different page it wont get interupted, or adding a modal to have a confirmation that moving pages will discard the generation when it is still on progress
+3. in the test page add a section navigation (writing/listening/reading) so the user know when clicking finnish and review means completing all of the section path
+4. Update the kokoro TTS to have a better voice model
+5. Add a Speech to text model to generate speaking transcript to be submited along with the user speaking submission
+
+
+Review the full repo in claude on
+1. How to review the test suite to not create a fabricated test score when the answer is full empty, and for the LLM call to have better judgement and review scoring for all subjective answer.

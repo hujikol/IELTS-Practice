@@ -1,7 +1,7 @@
 // §5.2 single-source adapter. `material.requirements()` owns every schema, numeric
 // constraint and rule sentence; the guide renderer only formats. This file is the one
 // place the two meet, so prompt text cannot drift from the validation contract.
-import { requirements, type Requirements } from './material.ts';
+import { requirements, schemaToJsonSchema, type Requirements } from './material.ts';
 import type { PrepJob, TestData } from './types.ts';
 import type { GuideBrief, GuideConstraint, GuideRequirements } from './guide.ts';
 
@@ -30,7 +30,7 @@ export function guideRequirements(t: TestData, job: PrepJob): GuideRequirements 
   const spec = requirements(t, job);
   return {
     job,
-    schema: { $comment: 'Material schema is enforced by import validation; see the hard rules below.' },
+    schema: schemaToJsonSchema(spec.schema),
     constraints: {
       hard: spec.constraints.map((text, i) => constraint(text, `hard_${i + 1}`)),
       targets: spec.targets.map((text, i) => constraint(text, `target_${i + 1}`)),

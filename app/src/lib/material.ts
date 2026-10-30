@@ -1,6 +1,7 @@
 // §3.2 pure material core. Bundles in browser and Node with no cloudflare:workers,
 // Next, node:fs, Tauri, network or environment access. Everything a model may emit
 // arrives here as `unknown` and leaves only after shape + semantic validation.
+import type { JsonSchema } from './guide.ts';
 import {
   ValidationError,
   countWords,
@@ -25,8 +26,8 @@ import {
 // No validation library is installed and none may be added (P0-04 constraint), so
 // this is the whole schema system: enough to express "every key required, no extras".
 
-type Schema =
-  | { kind: 'obj'; props: Record<string, Schema> }
+export type Schema =
+  | { kind: 'obj'; props: Record<string, Schema>; optional?: readonly string[] }
   | { kind: 'arr'; items: Schema }
   | { kind: 'str'; max?: number }
   | { kind: 'int' }
@@ -34,7 +35,11 @@ type Schema =
   | { kind: 'enum'; values: readonly string[] }
   | { kind: 'nullable'; inner: Schema };
 
-const obj = (props: Record<string, Schema>): Schema => ({ kind: 'obj', props });
+const obj = (props: Record<string, Schema>, optional?: readonly string[]): Schema => ({
+  kind: 'obj',
+  props,
+  ...(optional ? { optional } : {}),
+});
 const arr = (items: Schema): Schema => ({ kind: 'arr', items });
 const str = (max?: number): Schema => ({ kind: 'str', ...(max ? { max } : {}) });
 const int: Schema = { kind: 'int' };
@@ -55,19 +60,38 @@ const MIN_GROUPS = 2;
 const MATCH_BANK_MIN = 5;
 const MATCH_BANK_MAX = 8;
 
-const questionSchema: Schema = obj({
-  stem: str(),
-  kind: enm(QUESTION_KINDS),
-  choices: arr(str()),
-  correct: int,
-  answerText: str(),
-  accepted: arr(str()),
-  maxWords: int,
-  explanation: str(),
-  evidence: str(),
-  skill: str(),
-  group: int,
-});
+const questionSchema: Schema = obj(
+  {
+    stem: str(),
+    kind: enm(QUESTION_KINDS),
+    choices: arr(str()),
+    correct: int,
+    answerText: str(),
+    accepted: arr(str()),
+    maxWords: int,
+    explanation: str(),
+    evidence: str(),
+    skill: str(),
+    group: int,
+    target_band: { kind: 'num' },
+    common_mistake_tag: str(),
+    strategy_tip: str(),
+    distractor_notes: arr(
+      obj({
+        option: str(),
+        why_tempting: str(),
+        why_wrong: str(),
+      }),
+    ),
+    paraphrase_map: arr(
+      obj({
+        question_wording: str(),
+        source_wording: str(),
+      }),
+    ),
+  },
+  ['target_band', 'common_mistake_tag', 'strategy_tip', 'distractor_notes', 'paraphrase_map'],
+);
 
 const scriptLineSchema: Schema = obj({
   speaker: enm(['woman', 'man'] as const),
@@ -75,14 +99,39 @@ const scriptLineSchema: Schema = obj({
   group: int,
 });
 
-export const rawBlockSchema: Schema = obj({
-  title: str(),
-  description: str(),
-  text: str(),
-  groups: arr(obj({ title: str(), instructions: str(), start: int, end: int })),
-  questions: arr(questionSchema),
-  script: arr(scriptLineSchema),
-});
+const optionalVisualSchema: Schema = {
+  kind: 'nullable',
+  inner: obj({
+    type: enm(VISUAL_TYPES),
+    caption: str(),
+    columns: arr(str()),
+    rows: arr(arr(str())),
+  }),
+};
+
+export const rawBlockSchema: Schema = obj(
+  {
+    title: str(),
+    description: str(),
+    text: str(),
+    groups: arr(
+      obj(
+        {
+          title: str(),
+          instructions: str(),
+          start: int,
+          end: int,
+          visual: optionalVisualSchema,
+        },
+        ['visual'],
+      ),
+    ),
+    questions: arr(questionSchema),
+    script: arr(scriptLineSchema),
+    visual: optionalVisualSchema,
+  },
+  ['description', 'visual'],
+);
 
 export const rawWritingSchema: Schema = obj({
   tasks: arr(
@@ -121,8 +170,10 @@ export function validateShape(value: unknown, schema: Schema, path = 'material')
         throw new ValidationError('bad_type', `${path}: expected an object.`, path);
       }
       const record = value as Record<string, unknown>;
+      const optionalSet = new Set(schema.optional ?? []);
       for (const key of Object.keys(schema.props)) {
         if (!Object.hasOwn(record, key)) {
+          if (optionalSet.has(key)) continue;
           throw new ValidationError('missing_key', `${path}.${key} is required.`, `${path}.${key}`);
         }
         validateShape(record[key], schema.props[key]!, `${path}.${key}`);
@@ -178,6 +229,58 @@ export function validateShape(value: unknown, schema: Schema, path = 'material')
         );
       }
       return;
+    }
+  }
+}
+
+/** Convert internal Schema to standard JSON schema for AI prompts (§5.1). */
+export function schemaToJsonSchema(schema: Schema): JsonSchema {
+  switch (schema.kind) {
+    case 'obj': {
+      const properties: Record<string, JsonSchema> = {};
+      const required: string[] = [];
+      const optionalSet = new Set(schema.optional ?? []);
+      for (const [key, prop] of Object.entries(schema.props)) {
+        properties[key] = schemaToJsonSchema(prop);
+        if (!optionalSet.has(key)) {
+          required.push(key);
+        }
+      }
+      return {
+        type: 'object',
+        additionalProperties: false,
+        required,
+        properties,
+      };
+    }
+    case 'arr':
+      return {
+        type: 'array',
+        items: schemaToJsonSchema(schema.items),
+      };
+    case 'str':
+      return {
+        type: 'string',
+        ...(schema.max !== undefined ? { maxLength: schema.max } : {}),
+      };
+    case 'int':
+      return {
+        type: 'integer',
+      };
+    case 'num':
+      return {
+        type: 'number',
+      };
+    case 'enum':
+      return {
+        type: 'string',
+        enum: [...schema.values],
+      };
+    case 'nullable': {
+      const inner = schemaToJsonSchema(schema.inner);
+      return {
+        oneOf: [inner, { type: 'null' }],
+      };
     }
   }
 }
@@ -274,7 +377,7 @@ const FORMATS: Record<'listening' | 'reading', string[]> = {
     'An everyday service or booking conversation between a woman and a man. Note/form completion with natural corrections to dates, prices or spellings.',
     'ONE speaker giving a social-context talk. Multiple choice plus matching with a shared option bank.',
     'A two-person academic discussion with nuanced disagreement and changing views. Multiple choice and matching.',
-    'ONE speaker giving an academic lecture. Note or sentence completion.',
+    'ONE speaker giving an academic lecture. Divided into at least 2 question groups (e.g. Questions 1-5 and 6-10 note/sentence completion).',
   ],
   reading: [
     'A narrative structure with an unexpected research finding.',
@@ -302,9 +405,9 @@ export function requirements(t: TestData, job: PrepJob): Requirements {
     const constraints = [
       `Exactly ${count} questions.`,
       section === 'listening'
-        ? 'Between 620 and 950 words of spoken script.'
-        : 'Between 720 and 910 words of passage text.',
-      `Between ${MIN_GROUPS} and ${MAX_GROUPS} question groups.`,
+        ? 'Between 620 and 950 words of spoken script. Concise length required; exceeding 950 words will be rejected.'
+        : 'Between 720 and 910 words of passage text. Concise length required; exceeding 910 words will be rejected (target 800 words).',
+      `Between ${MIN_GROUPS} and ${MAX_GROUPS} question groups (never produce only 1 group; you must divide questions into at least 2 distinct groups).`,
       `Groups must tile questions 1 to ${count} exactly: the first starts at 1, each next starts at the previous end plus 1, and the last ends at ${count}.`,
       'Every question carries the zero-based index of its group in the groups array.',
       'All questions in one group use the same format and the same word limit.',
@@ -768,6 +871,11 @@ function toBlock(raw: RawBlock, section: 'listening' | 'reading', part: number, 
     group: q.group,
     maxWords: q.maxWords,
     evidence: q.evidence,
+    target_band: q.target_band,
+    common_mistake_tag: q.common_mistake_tag,
+    strategy_tip: q.strategy_tip,
+    distractor_notes: q.distractor_notes,
+    paraphrase_map: q.paraphrase_map,
   }));
   const script: ScriptLine[] | undefined =
     section === 'listening' ? raw.script.map((l) => ({ ...l })) : undefined;
@@ -776,8 +884,9 @@ function toBlock(raw: RawBlock, section: 'listening' | 'reading', part: number, 
     text: raw.text,
     questions,
     ...(script ? { script } : {}),
-    groups: raw.groups.map((g) => ({ ...g })),
-    description: raw.description,
+    groups: raw.groups.map((g) => ({ ...g, visual: g.visual ?? null })),
+    description: raw.description ?? raw.title,
+    visual: raw.visual ?? null,
   };
   return block;
 }
@@ -800,8 +909,70 @@ export function applyMaterial(t: TestData, job: PrepJob, data: unknown): TestDat
   };
 
   if (job.section === 'listening' || job.section === 'reading') {
-    validateShape(data, spec.schema, 'data');
-    const raw = data as RawBlock;
+    let payload = data;
+    if (
+      job.section === 'listening' &&
+      typeof data === 'object' &&
+      data !== null &&
+      Array.isArray((data as { script?: unknown }).script)
+    ) {
+      const script = (data as { script: RawScriptLine[] }).script;
+      payload = {
+        ...data,
+        text: joinedScript(script),
+      };
+    }
+
+    // Auto-split single group for listening/reading if an AI model emits 1 group covering all questions
+    if (
+      typeof payload === 'object' &&
+      payload !== null &&
+      Array.isArray((payload as { groups?: unknown }).groups) &&
+      Array.isArray((payload as { questions?: unknown }).questions)
+    ) {
+      const d = payload as { groups: RawGroup[]; questions: RawQuestion[]; script?: RawScriptLine[] };
+      const qCount = d.questions.length;
+      if (d.groups.length === 1 && qCount >= 6 && d.groups[0]?.start === 1 && d.groups[0]?.end === qCount) {
+        const mid = Math.floor(qCount / 2);
+        const originalGroup = d.groups[0]!;
+        const g1: RawGroup = {
+          title: originalGroup.title ? `${originalGroup.title} — Part 1` : 'Section 1',
+          instructions: originalGroup.instructions,
+          start: 1,
+          end: mid,
+        };
+        const g2: RawGroup = {
+          title: originalGroup.title ? `${originalGroup.title} — Part 2` : 'Section 2',
+          instructions: originalGroup.instructions,
+          start: mid + 1,
+          end: qCount,
+        };
+        const updatedQuestions = d.questions.map((q, idx) => ({
+          ...q,
+          group: idx < mid ? 0 : 1,
+        }));
+        let updatedScript = d.script;
+        if (Array.isArray(updatedScript) && updatedScript.length > 0) {
+          const hasG1 = updatedScript.some((t) => t.group === 1);
+          if (!hasG1) {
+            const scriptMid = Math.max(1, Math.floor(updatedScript.length / 2));
+            updatedScript = updatedScript.map((turn, tIdx) => ({
+              ...turn,
+              group: tIdx < scriptMid ? 0 : 1,
+            }));
+          }
+        }
+        payload = {
+          ...d,
+          groups: [g1, g2],
+          questions: updatedQuestions,
+          ...(updatedScript ? { script: updatedScript } : {}),
+        };
+      }
+    }
+
+    validateShape(payload, spec.schema, 'data');
+    const raw = payload as RawBlock;
     validateBlock(raw, job.section, job.part);
     const block = toBlock(raw, job.section, job.part, t.scope);
     const bucket = job.section === 'listening' ? next.listening : next.reading;

@@ -1,6 +1,11 @@
 // Shared type contract. Owned centrally so parallel workstreams compile against one shape.
 // Behavioral rules live in material.ts (validators) — this file is types only.
 
+import type { MistakeTag, FinalReport, Attempt } from './scoring.ts';
+
+export * from './bands.ts';
+export * from './scoring.ts';
+
 export type Section = 'listening' | 'reading';
 export type Scope = 'full' | 'listening' | 'reading' | 'writing' | 'speaking';
 export type QuestionKind = 'gap' | 'choice' | 'match' | 'tfng' | 'ynng';
@@ -23,11 +28,22 @@ export type Question = {
   number?: number;
   maxWords?: number;
   evidence?: string;
+  target_band?: number;
+  common_mistake_tag?: MistakeTag;
+  strategy_tip?: string;
+  distractor_notes?: { option: string; why_tempting: string; why_wrong: string }[];
+  paraphrase_map?: { question_wording: string; source_wording: string }[];
 };
 
 export type ScriptLine = { speaker: Speaker; text: string; group: number };
 
-export type QuestionGroup = { title: string; instructions: string; start: number; end: number };
+export type QuestionGroup = {
+  title: string;
+  instructions: string;
+  start: number;
+  end: number;
+  visual?: WritingVisual | null;
+};
 
 export type Block = {
   title: string;
@@ -37,6 +53,7 @@ export type Block = {
   groups?: QuestionGroup[];
   description?: string;
   voices?: Record<string, { voice: string; accent: string }>;
+  visual?: WritingVisual | null;
 };
 
 export type Rubric = {
@@ -131,6 +148,8 @@ export type TestData = {
   audioPlayed?: boolean[];
   privacyWarnings?: number;
   result?: Result;
+  finalReport?: FinalReport;
+  attemptCapture?: Attempt;
 };
 
 // §4 canonical envelope. Exactly these five keys, no aliases.
@@ -159,21 +178,33 @@ export type RawQuestion = {
   evidence: string;
   skill: string;
   group: number;
+  target_band?: number;
+  common_mistake_tag?: MistakeTag;
+  strategy_tip?: string;
+  distractor_notes?: { option: string; why_tempting: string; why_wrong: string }[];
+  paraphrase_map?: { question_wording: string; source_wording: string }[];
 };
 
 /** No 'narrator': the app injects narration when building audio lines. */
 export type RawScriptLine = { speaker: 'woman' | 'man'; text: string; group: number };
 
-export type RawGroup = { title: string; instructions: string; start: number; end: number };
+export type RawGroup = {
+  title: string;
+  instructions: string;
+  start: number;
+  end: number;
+  visual?: RawWritingVisual | null;
+};
 
 export type RawBlock = {
   title: string;
-  description: string;
+  description?: string;
   text: string;
   groups: RawGroup[];
   questions: RawQuestion[];
   /** Reading must be exactly []; Listening carries the turns. */
   script: RawScriptLine[];
+  visual?: RawWritingVisual | null;
 };
 
 export type RawWritingVisual = {
@@ -271,9 +302,10 @@ export type AttemptRecord = {
   requests: Record<string, JobRequest>;
   // Current accepted import per job, plus append-only audit history (§18.3).
   imports: Record<string, ImportRef>;
-  import_history: Record<string, ImportHistoryEntry[]>;
+  import_history: Record<string, unknown[]>;
   voice_seed?: number;
   voice_map?: VoiceMap;
+  timer?: { remaining: number; running: boolean; checkpoint: number };
 };
 
 export type JobRequest = {
@@ -283,17 +315,17 @@ export type JobRequest = {
   // replaces it. §18.3 — an upgrade must not reinterpret an old prompt under a new schema.
   snapshot: string;
   /** Material contract version at issue time. Import of an unsupported version is rejected. */
-  contract_version: number;
-  envelope_version: 1;
+  contract_version?: number;
+  envelope_version?: 1;
 };
 
 export type ImportRef = {
   sha256: string;
-  accepted_at: number;
+  accepted_at?: number;
   original_path: string;
   generation_id: string;
-  contract_version: number;
-  envelope_version: 1;
+  contract_version?: number;
+  envelope_version?: 1;
 };
 
 /** §18.3 ordered per-job audit history. Replacement appends; deletion is explicit only. */
@@ -475,10 +507,10 @@ export function score(t: TestData): Result {
 
 // Redaction for the timed view. Local redaction prevents accidental spoilers,
 // not inspection by a machine owner.
-export function publicTest(t: TestData, mode = 'untimed', completed = false) {
+export function publicTest(t: TestData, _mode = 'untimed', completed = false) {
   const strip = (b: Block, listening = false) => ({
     ...b,
-    ...(listening && mode === 'timed' && !completed ? { text: '', script: undefined } : {}),
+    ...(listening && !completed ? { text: '', script: undefined } : {}),
     questions: b.questions.map(({ correct, explanation, answerText, accepted, evidence, ...q }) => q),
   });
   const { answers, jobLocks, ...rest } = t;
@@ -487,4 +519,26 @@ export function publicTest(t: TestData, mode = 'untimed', completed = false) {
     listening: t.listening.map((b) => strip(b, true)),
     reading: t.reading.map((b) => strip(b)),
   };
+}
+
+/**
+ * Extracts the clean place or facility name from a question stem,
+ * stripping extraneous question wrappers (e.g. "Where is the...", "Which letter indicates the...").
+ */
+export function extractPlaceName(stem: string): string {
+  if (!stem) return '';
+  let s = stem.trim();
+  s = s.replace(/^(Q?\d+[.:)-]\s*)/i, '').trim();
+  s = s.replace(/^(where\s+(is|are)\s+(the\s+)?)/i, '');
+  s = s.replace(/^(which\s+(letter|number|area|building|location|place|zone|pin)\s+(marks|represents|shows|indicates|is|is\s+the)\s+(the\s+)?)/i, '');
+  s = s.replace(/^(what\s+is\s+the\s+location\s+of\s+(the\s+)?)/i, '');
+  s = s.replace(/^(the\s+location\s+of\s+(the\s+)?)/i, '');
+  s = s.replace(/^(label\s+for\s+(the\s+)?)/i, '');
+  s = s.replace(/\s+(located|situated|found)\??$/i, '');
+  s = s.replace(/\?+$/, '').trim();
+  s = s.replace(/[.:-]+$/, '').trim();
+  s = s.replace(/^the\s+/i, '');
+  s = s.trim();
+  if (!s) s = stem.trim();
+  return s.charAt(0).toUpperCase() + s.slice(1);
 }

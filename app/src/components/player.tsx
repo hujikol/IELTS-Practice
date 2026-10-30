@@ -11,6 +11,9 @@ import { useCallback, useEffect, useMemo, useRef, useState } from 'react';
 import { CommandError, loadAttempt, type AttemptRecord } from '../lib/attempts.ts';
 import { Session, type Outbox, type Patch, type SaveState, type TimerState } from '../lib/session.ts';
 import { countWords, publicTest, type QuestionGroup } from '../lib/types.ts';
+import { VisualRenderer, MapPlanLabellingRenderer, extractPlaceName } from './visual-renderer.tsx';
+import { ListeningAudioPlayer } from './listening-audio-player.tsx';
+import { Button } from './ui/button.tsx';
 
 const SECTION_LABELS = ['Listening', 'Reading', 'Writing', 'Speaking'] as const;
 
@@ -89,7 +92,7 @@ function readTimer(record: AttemptRecord): TimerState | null {
 
 export function Player({
   attempt,
-  phase,
+  phase: initialPhase,
   onExit,
   onFinish,
 }: {
@@ -98,6 +101,7 @@ export function Player({
   onExit: () => void;
   onFinish: (record: AttemptRecord) => void;
 }) {
+  const [phase, setPhase] = useState(initialPhase ?? 0);
   const [session] = useState(
     () =>
       new Session({
@@ -122,8 +126,47 @@ export function Player({
   const [part, setPart] = useState(0);
   const [group, setGroup] = useState(0);
   const [notesOpen, setNotesOpen] = useState(false);
+  const [showForfeitModal, setShowForfeitModal] = useState(false);
+  const [selectedMapQuestionId, setSelectedMapQuestionId] = useState<string | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  const availableSections = useMemo(() => {
+    const list: { phase: number; key: string; label: string; count: number; partLabel: string }[] = [];
+    if (attempt.data.listening && attempt.data.listening.length > 0) {
+      list.push({ phase: 0, key: 'listening', label: 'Listening', count: attempt.data.listening.length, partLabel: 'Part' });
+    }
+    if (attempt.data.reading && attempt.data.reading.length > 0) {
+      list.push({ phase: 1, key: 'reading', label: 'Reading', count: attempt.data.reading.length, partLabel: 'Passage' });
+    }
+    if (attempt.data.writing && attempt.data.writing.length > 0) {
+      list.push({ phase: 2, key: 'writing', label: 'Writing', count: attempt.data.writing.length, partLabel: 'Task' });
+    }
+    if (attempt.data.speaking && attempt.data.speaking.length > 0) {
+      list.push({ phase: 3, key: 'speaking', label: 'Speaking', count: attempt.data.speaking.length, partLabel: 'Part' });
+    }
+    return list;
+  }, [attempt.data]);
+
+  const currentSectionIdx = availableSections.findIndex((s) => s.phase === phase);
+  const nextSection = currentSectionIdx >= 0 && currentSectionIdx < availableSections.length - 1
+    ? availableSections[currentSectionIdx + 1]
+    : null;
+  const isLastSection = !nextSection;
+
+  const switchSection = (targetPhase: number) => {
+    session.checkpoint(Date.now());
+    setPhase(targetPhase);
+    setPart(0);
+    setGroup(0);
+    window.scrollTo({ top: 0, behavior: 'smooth' });
+  };
+
+  const goToNextSection = () => {
+    if (nextSection) {
+      switchSection(nextSection.phase);
+    }
+  };
 
   useEffect(() => session.subscribe(setState), [session]);
 
@@ -176,10 +219,72 @@ export function Player({
   const visible = activeGroup ? questions.slice(activeGroup.start - 1, activeGroup.end) : questions;
   const matchBank = visible[0]?.kind === 'match' ? visible[0].choices : null;
 
+  const isMapQuestion = useMemo(() => {
+    if (!activeGroup) return false;
+    const groupText = `${activeGroup.title} ${activeGroup.instructions}`.toLowerCase();
+    const hasMapKeyword =
+      groupText.includes('map') ||
+      groupText.includes('plan') ||
+      groupText.includes('diagram') ||
+      groupText.includes('layout') ||
+      groupText.includes('labelling');
+    const hasLetterChoices = visible.some(
+      (q) => q.choices && q.choices.length >= 4 && q.choices.every((c) => /^[A-H]$/.test(c.trim())),
+    );
+    return hasMapKeyword || hasLetterChoices;
+  }, [activeGroup, visible]);
+
   const offsetOf = useCallback(
     (p: number) => blocks.slice(0, p).reduce((n, b) => n + b.questions.length, 0),
     [blocks],
   );
+
+  const placedMapAnswers = useMemo(() => {
+    const result: Record<string, { questionId: string; questionNumber: number; stem: string; placeName: string }> = {};
+    visible.forEach((q) => {
+      const val = data.responses[q.id];
+      if (val !== undefined && val !== null && String(val).trim() !== '') {
+        const letter =
+          typeof val === 'number' && q.choices && q.choices[val]
+            ? q.choices[val].trim().toUpperCase()
+            : String(val).trim().toUpperCase();
+        if (letter && /^[A-H]$/.test(letter)) {
+          result[letter] = {
+            questionId: q.id,
+            questionNumber: numberOf(q, offsetOf(index)),
+            stem: q.stem,
+            placeName: extractPlaceName(q.stem),
+          };
+        }
+      }
+    });
+    return result;
+  }, [visible, data.responses, offsetOf, index]);
+
+  const handleDropMapAnswer = (pin: string, qId: string) => {
+    const targetQ = visible.find((q) => q.id === qId);
+    if (!targetQ) return;
+    const choiceIndex = targetQ.choices ? targetQ.choices.findIndex((c) => c.trim().toUpperCase() === pin) : -1;
+    const answerVal = choiceIndex >= 0 ? choiceIndex : pin;
+
+    const patch: Record<string, string | number> = {
+      [qId]: answerVal,
+    };
+    // Unassign previous owner of this pin to avoid conflicting duplicate placements
+    const prevOwner = Object.entries(placedMapAnswers).find(([p, ans]) => p === pin && ans.questionId !== qId);
+    if (prevOwner) {
+      patch[prevOwner[1].questionId] = '';
+    }
+    edit({ responses: patch });
+    setSelectedMapQuestionId(null);
+  };
+
+  const handleClearMapPin = (pin: string) => {
+    const placed = placedMapAnswers[pin];
+    if (placed) {
+      edit({ responses: { [placed.questionId]: '' } });
+    }
+  };
 
   const answered = (id: string) => {
     const value = data.responses[id];
@@ -207,12 +312,27 @@ export function Player({
     setBusy(true);
     setError('');
     try {
-      await session.saveAndExit(Date.now());
-      onExit();
+      await Promise.race([
+        session.saveAndExit(Date.now()),
+        new Promise((_, reject) => setTimeout(() => reject(new Error('Save timeout')), 3000)),
+      ]);
     } catch (e) {
-      setError(
-        `${e instanceof CommandError ? e.message : 'Could not save.'} Your work is still on this device — retry before you leave.`,
-      );
+      console.warn('[IELTS Studio] Notice during save & exit:', e);
+    } finally {
+      setBusy(false);
+      onExit();
+    }
+  };
+
+  const handleForfeit = async () => {
+    setShowForfeitModal(false);
+    setBusy(true);
+    setError('');
+    try {
+      await session.finish();
+      onFinish(await loadAttempt(attempt.id));
+    } catch (e) {
+      setError(e instanceof CommandError ? e.message : 'Could not forfeit the attempt.');
     } finally {
       setBusy(false);
     }
@@ -253,8 +373,13 @@ export function Player({
     conflict: 'Changed elsewhere — reload',
   };
 
+  const currentNotes = data.notes?.[phase] ?? '';
+  const totalQuestions = questions.length;
+  const answeredCount = useMemo(() => questions.filter((q) => answered(q.id)).length, [questions, data.responses]);
+  const markedCount = useMemo(() => questions.filter((q) => marked.includes(q.id)).length, [questions, marked]);
+
   return (
-    <main style={{ fontFamily: 'system-ui', padding: 16, maxWidth: 1100, margin: '0 auto' }}>
+    <main style={{ fontFamily: 'system-ui', padding: '16px 20px', maxWidth: 1260, margin: '0 auto', position: 'relative' }}>
       <header style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
         <div>
           <strong>{SECTION_LABELS[phase] ?? 'Practice'}</strong>
@@ -269,28 +394,104 @@ export function Player({
             {statusText[state.status]}
           </span>
           {state.status === 'failed' && (
-            <button onClick={() => void session.flush().catch(() => undefined)}>Retry save</button>
+            <Button variant="danger" size="sm" onClick={() => void session.flush().catch(() => undefined)}>
+              Retry save
+            </Button>
           )}
           {state.status === 'conflict' && (
-            <button onClick={() => void reload()} disabled={busy}>
+            <Button variant="outline" size="sm" onClick={() => void reload()} disabled={busy}>
               Reload
-            </button>
+            </Button>
           )}
-          <button aria-pressed={notesOpen} onClick={() => setNotesOpen(!notesOpen)}>
+          <Button
+            variant={notesOpen ? 'primary' : 'outline'}
+            size="sm"
+            aria-pressed={notesOpen}
+            onClick={() => setNotesOpen(!notesOpen)}
+          >
             Notes
-          </button>
-          <button onClick={() => void saveAndExit()} disabled={busy}>
+          </Button>
+          <Button variant="outline" size="sm" onClick={() => void saveAndExit()} disabled={busy}>
             {busy ? 'Saving…' : 'Save & exit'}
-          </button>
+          </Button>
+          {timed && (
+            <Button
+              variant="danger"
+              size="sm"
+              onClick={() => setShowForfeitModal(true)}
+              disabled={busy}
+              title="End the timed test immediately and view your diagnostic report"
+            >
+              Forfeit Test
+            </Button>
+          )}
           {timed ? (
             <strong aria-label={`Time remaining ${state.timer.remaining} seconds`} style={{ fontVariantNumeric: 'tabular-nums' }}>
               {labelOf(state.timer.remaining)}
             </strong>
           ) : (
-            <span style={{ fontSize: 13 }}>No time limit</span>
+            <span style={{ fontSize: 13, color: '#64748b', fontWeight: 500 }}>No time limit</span>
           )}
         </div>
       </header>
+
+      {/* Multi-Section Navigation Tabs */}
+      {availableSections.length > 1 && (
+        <nav
+          aria-label="Test sections"
+          style={{
+            display: 'flex',
+            gap: 8,
+            marginTop: 14,
+            marginBottom: 6,
+            padding: '6px 8px',
+            backgroundColor: '#f8fafc',
+            border: '1px solid #e2e8f0',
+            borderRadius: 10,
+            overflowX: 'auto',
+          }}
+        >
+          {availableSections.map((sec, idx) => {
+            const isActive = sec.phase === phase;
+            return (
+              <button
+                key={sec.phase}
+                type="button"
+                onClick={() => switchSection(sec.phase)}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  padding: '6px 14px',
+                  borderRadius: 8,
+                  border: 'none',
+                  backgroundColor: isActive ? '#0f172a' : 'transparent',
+                  color: isActive ? '#ffffff' : '#475569',
+                  fontSize: 13,
+                  fontWeight: isActive ? 700 : 500,
+                  cursor: 'pointer',
+                  transition: 'all 0.15s ease',
+                  whiteSpace: 'nowrap',
+                }}
+              >
+                <span>{idx + 1}. {sec.label}</span>
+                <span
+                  style={{
+                    fontSize: 11,
+                    padding: '2px 7px',
+                    borderRadius: 9999,
+                    backgroundColor: isActive ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+                    color: isActive ? '#ffffff' : '#64748b',
+                    fontWeight: 600,
+                  }}
+                >
+                  {sec.count} {sec.partLabel}{sec.count > 1 ? 's' : ''}
+                </span>
+              </button>
+            );
+          })}
+        </nav>
+      )}
 
       {notice && (
         <p role="status" style={{ background: '#eff6ff', padding: 8 }}>
@@ -303,145 +504,491 @@ export function Player({
         </p>
       )}
 
-      {questions.length > 0 && (
-        <nav aria-label="Question navigator" style={{ display: 'flex', gap: 4, flexWrap: 'wrap', margin: '12px 0' }}>
-          {questions.map((q, i) => (
-            <button
-              key={q.id}
-              aria-label={`Go to question ${numberOf(q, offsetOf(index))}${marked.includes(q.id) ? ', marked' : ''}${
-                answered(q.id) ? ', answered' : ''
-              }`}
-              onClick={() => {
-                const gi = groups.findIndex((g) => i >= g.start - 1 && i < g.end);
-                if (gi >= 0) setGroup(gi);
-                document.getElementById(`q-${q.id}`)?.scrollIntoView({ block: 'center' });
-              }}
+      <div
+        style={{
+          display: 'flex',
+          gap: 24,
+          alignItems: 'flex-start',
+          marginTop: 18,
+          position: 'relative',
+        }}
+      >
+        {/* Left Side: Question Set & Marked Indicator (Opposite of Notes) */}
+        {questions.length > 0 && (
+          <aside
+            aria-label="Question navigator and marked items"
+            style={{
+              width: '210px',
+              flexShrink: 0,
+              position: 'sticky',
+              top: '16px',
+              backgroundColor: '#ffffff',
+              border: '1px solid #cbd5e1',
+              borderRadius: '8px',
+              padding: '14px',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div
               style={{
-                minWidth: 30,
-                fontWeight: marked.includes(q.id) ? 700 : 400,
-                background: answered(q.id) ? '#e0f2fe' : undefined,
-                borderStyle: marked.includes(q.id) ? 'solid' : 'dashed',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center',
+                marginBottom: '10px',
               }}
             >
-              {numberOf(q, offsetOf(index))}
-            </button>
-          ))}
-        </nav>
-      )}
+              <strong style={{ fontSize: '13px', color: '#0f172a' }}>Questions</strong>
+              <span
+                style={{
+                  fontSize: '11px',
+                  fontWeight: 600,
+                  color: '#2563eb',
+                  backgroundColor: '#eff6ff',
+                  padding: '2px 6px',
+                  borderRadius: '4px',
+                }}
+              >
+                {answeredCount}/{totalQuestions}
+              </span>
+            </div>
+
+            {/* Marked for Review Indicator */}
+            <div
+              style={{
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'space-between',
+                padding: '6px 10px',
+                backgroundColor: markedCount > 0 ? '#fffbeb' : '#f8fafc',
+                border: markedCount > 0 ? '1px solid #fde68a' : '1px solid #e2e8f0',
+                borderRadius: '6px',
+                marginBottom: '12px',
+                fontSize: '11px',
+                color: markedCount > 0 ? '#b45309' : '#64748b',
+              }}
+            >
+              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
+                <span>⚑</span>
+                <span>Marked:</span>
+              </span>
+              <strong style={{ fontWeight: 700 }}>{markedCount}</strong>
+            </div>
+
+            {/* Question Buttons Grid */}
+            <nav
+              aria-label="Question list"
+              style={{
+                display: 'grid',
+                gridTemplateColumns: 'repeat(4, 1fr)',
+                gap: '6px',
+              }}
+            >
+              {questions.map((q, i) => {
+                const num = numberOf(q, offsetOf(index));
+                const isAnswered = answered(q.id);
+                const isMarked = marked.includes(q.id);
+                const isInCurrentGroup = activeGroup && i >= activeGroup.start - 1 && i < activeGroup.end;
+                return (
+                  <button
+                    key={q.id}
+                    type="button"
+                    aria-label={`Question ${num}${isMarked ? ', marked for review' : ''}${isAnswered ? ', answered' : ', not answered'}`}
+                    onClick={() => {
+                      const gi = groups.findIndex((g) => i >= g.start - 1 && i < g.end);
+                      if (gi >= 0) setGroup(gi);
+                      if (isMapQuestion) {
+                        setSelectedMapQuestionId(q.id);
+                      } else {
+                        document.getElementById(`q-${q.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                      }
+                    }}
+                    style={{
+                      height: '32px',
+                      padding: '0 4px',
+                      borderRadius: '6px',
+                      fontSize: '12px',
+                      fontWeight: isAnswered ? 700 : 500,
+                      backgroundColor: isAnswered ? '#eff6ff' : '#ffffff',
+                      color: isAnswered ? '#1d4ed8' : '#334155',
+                      border: isMarked
+                        ? '2px solid #f59e0b'
+                        : isInCurrentGroup
+                          ? '2px solid #0f172a'
+                          : isAnswered
+                            ? '1px solid #93c5fd'
+                            : '1px solid #cbd5e1',
+                      cursor: 'pointer',
+                      position: 'relative',
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      transition: 'all 0.15s ease',
+                    }}
+                    title={`Question ${num}: ${isAnswered ? 'Answered' : 'Unanswered'}${isMarked ? ' (Marked for review)' : ''}`}
+                  >
+                    {num}
+                    {isMarked && (
+                      <span
+                        style={{
+                          position: 'absolute',
+                          top: '-3px',
+                          right: '-3px',
+                          width: '7px',
+                          height: '7px',
+                          borderRadius: '50%',
+                          backgroundColor: '#f59e0b',
+                        }}
+                      />
+                    )}
+                  </button>
+                );
+              })}
+            </nav>
+
+            {/* Quick Status Legend */}
+            <div
+              style={{
+                marginTop: '12px',
+                paddingTop: '10px',
+                borderTop: '1px solid #e2e8f0',
+                fontSize: '10.5px',
+                color: '#64748b',
+                display: 'flex',
+                flexDirection: 'column',
+                gap: '5px',
+              }}
+            >
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '2px',
+                    backgroundColor: '#eff6ff',
+                    border: '1px solid #3b82f6',
+                    display: 'inline-block',
+                  }}
+                />
+                <span>Answered</span>
+              </div>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
+                <span
+                  style={{
+                    width: '10px',
+                    height: '10px',
+                    borderRadius: '2px',
+                    backgroundColor: '#ffffff',
+                    border: '2px solid #f59e0b',
+                    display: 'inline-block',
+                  }}
+                />
+                <span>Marked for review</span>
+              </div>
+            </div>
+          </aside>
+        )}
+
+        {/* Center: Main Question and Answer Area */}
+        <div style={{ flex: 1, minWidth: 0 }}>
 
       {block && (
-        <div style={{ display: 'flex', gap: 12, alignItems: 'flex-start', flexWrap: 'wrap' }}>
+        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
           <div style={{ flex: '1 1 420px' }}>
             {phase === 1 ? (
-              <article aria-label="Reading passage" style={{ border: '1px solid #cbd5e1', padding: 12 }}>
-                <h2 style={{ marginTop: 0 }}>{block.title}</h2>
+              <article aria-label="Reading passage" style={{ border: '1px solid #cbd5e1', padding: 16, borderRadius: 8, background: '#ffffff' }}>
+                <h2 style={{ marginTop: 0, fontSize: '1.25rem', color: '#0f172a' }}>{block.title}</h2>
                 {block.text.split('\n\n').map((p, i) => (
-                  <p key={i}>{p}</p>
+                  <p key={i} style={{ lineHeight: 1.6, color: '#334155', fontSize: '0.95rem' }}>{p}</p>
                 ))}
               </article>
             ) : (
-              <article aria-label="Listening" style={{ border: '1px solid #cbd5e1', padding: 12 }}>
-                <h2 style={{ marginTop: 0 }}>{block.title}</h2>
-                {/* §11.1 a timed attempt never renders the transcript. publicTest() has already
-                    emptied text and script; this states that rather than rendering a gap. */}
-                {timed ? (
-                  <p>One playback. The transcript is not available during a timed attempt.</p>
-                ) : (
-                  <details>
-                    <summary>Transcript</summary>
-                    {block.script?.length ? (
-                      block.script.map((l, i) => (
-                        <p key={i}>
-                          <b>{l.speaker}:</b> {l.text}
-                        </p>
-                      ))
-                    ) : (
-                      block.text
-                    )}
-                  </details>
-                )}
+              <article aria-label="Listening" style={{ border: '1px solid #cbd5e1', padding: 16, borderRadius: 8, background: '#ffffff' }}>
+                <h2 style={{ marginTop: 0, fontSize: '1.25rem', color: '#0f172a' }}>{block.title}</h2>
+                <ListeningAudioPlayer
+                  partNumber={index + 1}
+                  script={data.listening[index]?.script || []}
+                  timed={timed}
+                />
+                <p style={{ color: '#64748b', fontSize: '0.85rem', fontStyle: 'italic', margin: '8px 0 0' }}>
+                  Exam condition: The transcript is hidden on all modes during testing. Full transcript and evidence quotes are available in post-test review.
+                </p>
               </article>
             )}
 
             {groups.length > 1 && (
-              <div role="tablist" aria-label="Question groups" style={{ display: 'flex', gap: 6, margin: '10px 0' }}>
-                {groups.map((g, i) => (
-                  <button key={i} role="tab" aria-selected={group === i} onClick={() => setGroup(i)}>
-                    {numberOf(questions[g.start - 1] ?? questions[0]!, offsetOf(index))}–
-                    {numberOf(questions[g.end - 1] ?? questions[0]!, offsetOf(index))}
-                  </button>
-                ))}
+              <div
+                role="tablist"
+                aria-label="Question groups"
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  margin: '14px 0 10px',
+                  borderBottom: '1px solid #e2e8f0',
+                  paddingBottom: '8px',
+                }}
+              >
+                {groups.map((g, i) => {
+                  const isSelected = group === i;
+                  return (
+                    <button
+                      key={i}
+                      role="tab"
+                      type="button"
+                      aria-selected={isSelected}
+                      onClick={() => setGroup(i)}
+                      style={{
+                        padding: '6px 14px',
+                        borderRadius: '6px',
+                        border: 'none',
+                        backgroundColor: isSelected ? '#0f172a' : '#f1f5f9',
+                        color: isSelected ? '#ffffff' : '#475569',
+                        fontSize: '12px',
+                        fontWeight: 600,
+                        cursor: 'pointer',
+                      }}
+                    >
+                      Questions {numberOf(questions[g.start - 1] ?? questions[0]!, offsetOf(index))}–
+                      {numberOf(questions[g.end - 1] ?? questions[0]!, offsetOf(index))}
+                    </button>
+                  );
+                })}
               </div>
             )}
 
             {activeGroup && (
-              <h3>
-                {activeGroup.title} — {activeGroup.instructions}
+              <h3 style={{ fontSize: '1rem', color: '#1e293b', marginTop: 12, marginBottom: 8 }}>
+                {activeGroup.title} — <span style={{ fontWeight: 400, color: '#475569' }}>{activeGroup.instructions}</span>
               </h3>
             )}
 
-            {matchBank && (
-              <div aria-label="Matching answer bank" style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
+            {/* Visual Specs / Maps / Charts */}
+            {isMapQuestion ? (
+              <MapPlanLabellingRenderer
+                title={activeGroup?.title || 'Map & Plan Labelling'}
+                placedAnswers={placedMapAnswers}
+                questions={visible.map((q) => ({
+                  id: q.id,
+                  number: numberOf(q, offsetOf(index)),
+                  stem: q.stem,
+                  placeName: extractPlaceName(q.stem),
+                  isMarked: marked.includes(q.id),
+                }))}
+                onDropAnswer={handleDropMapAnswer}
+                onClearPin={handleClearMapPin}
+                selectedQuestionId={selectedMapQuestionId}
+                onSelectQuestion={setSelectedMapQuestionId}
+                onToggleMark={toggleMark}
+              />
+            ) : (
+              (activeGroup?.visual || block.visual) && (
+                <VisualRenderer visual={activeGroup?.visual || block.visual!} />
+              )
+            )}
+
+            {!isMapQuestion && matchBank && (
+              <div
+                aria-label="Matching answer bank"
+                style={{
+                  display: 'flex',
+                  gap: 8,
+                  flexWrap: 'wrap',
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: 6,
+                  padding: '10px 14px',
+                  margin: '10px 0',
+                }}
+              >
                 {matchBank.map((c, i) => (
-                  <span key={i}>
-                    {String.fromCharCode(65 + i)}. {c}
+                  <span key={i} style={{ fontSize: '13px', color: '#1e293b' }}>
+                    <strong>{String.fromCharCode(65 + i)}.</strong> {c}
                   </span>
                 ))}
               </div>
             )}
 
+            {!isMapQuestion && (
             <ol style={{ listStyle: 'none', padding: 0 }}>
               {visible.map((q) => {
                 const n = numberOf(q, offsetOf(index));
                 const value = data.responses[q.id];
                 const kind = q.kind ?? 'choice';
+                const isMarked = marked.includes(q.id);
                 return (
-                  <li key={q.id} id={`q-${q.id}`} style={{ border: '1px solid #cbd5e1', padding: 10, margin: '8px 0' }}>
-                    <div style={{ display: 'flex', justifyContent: 'space-between', gap: 8 }}>
-                      <span>
-                        <b>{n}.</b> {q.stem}
+                  <li
+                    key={q.id}
+                    id={`q-${q.id}`}
+                    style={{
+                      border: isMarked ? '1px solid #fcd34d' : '1px solid #cbd5e1',
+                      borderRadius: '8px',
+                      padding: '14px 16px',
+                      margin: '12px 0',
+                      backgroundColor: isMarked ? '#fffbeb' : '#ffffff',
+                      boxShadow: '0 1px 2px rgba(0, 0, 0, 0.03)',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', gap: 12 }}>
+                      <span style={{ fontSize: '14px', lineHeight: 1.5, color: '#0f172a' }}>
+                        <strong style={{ marginRight: '6px' }}>{n}.</strong> {q.stem}
                       </span>
-                      <button aria-pressed={marked.includes(q.id)} aria-label={`${marked.includes(q.id) ? 'Unmark' : 'Mark'} question ${n}`} onClick={() => toggleMark(q.id)}>
-                        {marked.includes(q.id) ? 'Marked' : 'Mark'}
+                      <button
+                        type="button"
+                        aria-pressed={isMarked}
+                        aria-label={`${isMarked ? 'Unmark' : 'Mark'} question ${n}`}
+                        onClick={() => toggleMark(q.id)}
+                        style={{
+                          background: isMarked ? '#fef3c7' : '#f8fafc',
+                          color: isMarked ? '#b45309' : '#64748b',
+                          border: isMarked ? '1px solid #fde68a' : '1px solid #cbd5e1',
+                          borderRadius: '6px',
+                          padding: '3px 8px',
+                          fontSize: '11px',
+                          fontWeight: 600,
+                          cursor: 'pointer',
+                          display: 'inline-flex',
+                          alignItems: 'center',
+                          gap: '4px',
+                          flexShrink: 0,
+                        }}
+                      >
+                        {isMarked ? '⚑ Marked' : '⚐ Mark'}
                       </button>
                     </div>
 
-                    {kind === 'gap' ? (
-                      <>
-                        <label htmlFor={`a-${q.id}`}>
-                          Answer {n}
-                          {q.maxWords
-                            ? ` (no more than ${q.maxWords} ${q.maxWords === 1 ? 'word' : 'words'})`
-                            : ''}
-                        </label>
-                        <input
-                          id={`a-${q.id}`}
-                          value={typeof value === 'string' ? value : ''}
-                          maxLength={150}
-                          autoComplete="off"
-                          onChange={(e) => edit({ responses: { [q.id]: e.target.value } })}
-                        />
-                      </>
-                    ) : (
-                      <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
-                        <legend style={{ fontSize: 13, color: '#475569' }}>Answer for question {n}</legend>
-                        {q.choices.map((c, i) => (
-                          <label key={i} style={{ display: 'block' }}>
-                            <input
-                              type="radio"
-                              name={`q-${q.id}`}
-                              checked={value === i}
-                              onChange={() => edit({ responses: { [q.id]: i } })}
-                            />{' '}
-                            {c}
+                    <div style={{ marginTop: '10px' }}>
+                      {isMapQuestion ? (
+                        <div>
+                          <div style={{ display: 'flex', alignItems: 'center', gap: '8px', flexWrap: 'wrap' }}>
+                            <span style={{ fontSize: '12px', fontWeight: 600, color: '#475569' }}>
+                              Map Location:
+                            </span>
+                            {['A', 'B', 'C', 'D', 'E', 'F', 'G', 'H'].map((letter) => {
+                              const isCurrent =
+                                (typeof value === 'number' && q.choices?.[value]?.toUpperCase() === letter) ||
+                                String(value).toUpperCase() === letter;
+                              return (
+                                <button
+                                  key={letter}
+                                  type="button"
+                                  onClick={() => handleDropMapAnswer(letter, q.id)}
+                                  style={{
+                                    width: '30px',
+                                    height: '30px',
+                                    borderRadius: '50%',
+                                    border: isCurrent ? '2px solid #1e40af' : '1px solid #cbd5e1',
+                                    backgroundColor: isCurrent ? '#2563eb' : '#ffffff',
+                                    color: isCurrent ? '#ffffff' : '#1e3a8a',
+                                    fontSize: '12px',
+                                    fontWeight: 700,
+                                    cursor: 'pointer',
+                                    display: 'inline-flex',
+                                    alignItems: 'center',
+                                    justifyContent: 'center',
+                                    boxShadow: isCurrent ? '0 1px 3px rgba(37,99,235,0.3)' : 'none',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                  title={`Place Question ${n} on Pin ${letter}`}
+                                >
+                                  {letter}
+                                </button>
+                              );
+                            })}
+                            {value !== undefined && value !== null && String(value).trim() !== '' && (
+                              <button
+                                type="button"
+                                onClick={() => edit({ responses: { [q.id]: '' } })}
+                                style={{
+                                  background: 'none',
+                                  border: 'none',
+                                  color: '#dc2626',
+                                  fontSize: '12px',
+                                  fontWeight: 600,
+                                  cursor: 'pointer',
+                                  padding: '2px 6px',
+                                  textDecoration: 'underline',
+                                }}
+                              >
+                                Clear Pin
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      ) : kind === 'gap' ? (
+                        <div>
+                          <label
+                            htmlFor={`a-${q.id}`}
+                            style={{ display: 'block', fontSize: '12px', color: '#64748b', marginBottom: '4px' }}
+                          >
+                            Answer for Question {n}
+                            {q.maxWords
+                              ? ` (NO MORE THAN ${q.maxWords} ${q.maxWords === 1 ? 'WORD' : 'WORDS'})`
+                              : ''}
                           </label>
-                        ))}
-                      </fieldset>
-                    )}
+                          <input
+                            id={`a-${q.id}`}
+                            value={typeof value === 'string' ? value : ''}
+                            maxLength={150}
+                            autoComplete="off"
+                            placeholder="Type your answer here..."
+                            onChange={(e) => edit({ responses: { [q.id]: e.target.value } })}
+                            style={{
+                              height: '38px',
+                              padding: '6px 12px',
+                              borderRadius: '6px',
+                              border: '1px solid #cbd5e1',
+                              fontSize: '14px',
+                              width: '100%',
+                              maxWidth: '380px',
+                              outline: 'none',
+                              boxSizing: 'border-box',
+                            }}
+                          />
+                        </div>
+                      ) : (
+                        <fieldset style={{ border: 'none', padding: 0, margin: 0 }}>
+                          <legend className="sr-only" style={{ position: 'absolute', width: '1px', height: '1px', overflow: 'hidden' }}>
+                            Options for question {n}
+                          </legend>
+                          <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                            {q.choices.map((c, i) => {
+                              const isChecked = value === i;
+                              return (
+                                <label
+                                  key={i}
+                                  style={{
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '10px',
+                                    padding: '8px 12px',
+                                    borderRadius: '6px',
+                                    border: isChecked ? '1px solid #93c5fd' : '1px solid #e2e8f0',
+                                    backgroundColor: isChecked ? '#eff6ff' : '#f8fafc',
+                                    color: isChecked ? '#1e40af' : '#334155',
+                                    fontSize: '13px',
+                                    cursor: 'pointer',
+                                    transition: 'all 0.15s ease',
+                                  }}
+                                >
+                                  <input
+                                    type="radio"
+                                    name={`q-${q.id}`}
+                                    checked={isChecked}
+                                    onChange={() => edit({ responses: { [q.id]: i } })}
+                                    style={{ margin: 0 }}
+                                  />
+                                  <span>{c}</span>
+                                </label>
+                              );
+                            })}
+                          </div>
+                        </fieldset>
+                      )}
+                    </div>
                   </li>
                 );
               })}
             </ol>
+            )}
           </div>
         </div>
       )}
@@ -453,27 +1000,7 @@ export function Player({
             <p>{view.writing[index].prompt}</p>
             <p>Write at least {view.writing[index].minimum} words.</p>
             {view.writing[index].visual && (
-              <figure>
-                <figcaption>{view.writing[index].visual.caption}</figcaption>
-                <table>
-                  <thead>
-                    <tr>
-                      {view.writing[index].visual.columns.map((c) => (
-                        <th key={c}>{c}</th>
-                      ))}
-                    </tr>
-                  </thead>
-                  <tbody>
-                    {view.writing[index].visual.rows.map((row, i) => (
-                      <tr key={i}>
-                        {row.map((cell, j) => (
-                          <td key={j}>{cell}</td>
-                        ))}
-                      </tr>
-                    ))}
-                  </tbody>
-                </table>
-              </figure>
+              <VisualRenderer visual={view.writing[index].visual} />
             )}
           </div>
           <div style={{ flex: '1 1 320px' }}>
@@ -526,48 +1053,267 @@ export function Player({
         </article>
       )}
 
+        </div>
+      </div>
+
+      {/* Floating Fillout Notes on the Right Side (Opposite of Question Navigator) */}
       {notesOpen && (
-        <aside style={{ border: '1px solid #cbd5e1', padding: 10, marginTop: 12 }}>
-          <label htmlFor="section-notes">Notes for {SECTION_LABELS[phase]}</label>
-          <textarea
-            id="section-notes"
-            rows={5}
-            style={{ width: '100%' }}
-            value={data.notes?.[phase] ?? ''}
-            onChange={(e) => {
-              const notes = [...(data.notes ?? [])];
-              notes[phase] = e.target.value;
-              edit({ notes });
+        <aside
+          aria-label={`Rough notes for ${SECTION_LABELS[phase]}`}
+          style={{
+            position: 'fixed',
+            top: '76px',
+            right: '24px',
+            width: '320px',
+            maxHeight: 'calc(100vh - 100px)',
+            backgroundColor: '#ffffff',
+            border: '1px solid #cbd5e1',
+            borderRadius: '12px',
+            boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08)',
+            display: 'flex',
+            flexDirection: 'column',
+            zIndex: 60,
+            overflow: 'hidden',
+          }}
+        >
+          <div
+            style={{
+              padding: '12px 16px',
+              borderBottom: '1px solid #e2e8f0',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              backgroundColor: '#f8fafc',
             }}
-          />
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
+              <span aria-hidden="true" style={{ fontSize: '15px' }}>📝</span>
+              <strong style={{ fontSize: '13px', color: '#0f172a' }}>
+                Scratchpad Notes ({SECTION_LABELS[phase]})
+              </strong>
+            </div>
+            <button
+              type="button"
+              onClick={() => setNotesOpen(false)}
+              aria-label="Close notes panel"
+              style={{
+                background: 'transparent',
+                border: 'none',
+                cursor: 'pointer',
+                fontSize: '14px',
+                color: '#64748b',
+                padding: '4px 6px',
+                borderRadius: '4px',
+              }}
+            >
+              ✕
+            </button>
+          </div>
+          <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', flex: 1 }}>
+            <label
+              htmlFor="section-notes"
+              style={{ fontSize: '11px', color: '#64748b', marginBottom: '6px' }}
+            >
+              Draft notes, keywords, spellings, or outlines (auto-saved):
+            </label>
+            <textarea
+              id="section-notes"
+              rows={12}
+              placeholder="Type notes here..."
+              style={{
+                width: '100%',
+                boxSizing: 'border-box',
+                padding: '10px',
+                fontSize: '13px',
+                lineHeight: 1.5,
+                borderRadius: '6px',
+                border: '1px solid #cbd5e1',
+                resize: 'vertical',
+                fontFamily: 'inherit',
+                outline: 'none',
+              }}
+              value={currentNotes}
+              onChange={(e) => {
+                const notes = [...(data.notes ?? [])];
+                notes[phase] = e.target.value;
+                edit({ notes });
+              }}
+            />
+            <div style={{ marginTop: '8px', fontSize: '11px', color: '#94a3b8', textAlign: 'right' }}>
+              {countWords(currentNotes)} words
+            </div>
+          </div>
         </aside>
       )}
 
-      <footer style={{ display: 'flex', gap: 8, marginTop: 16, flexWrap: 'wrap', alignItems: 'center' }}>
+      {/* Floating Notes Toggle on bottom-right if notes drawer is closed */}
+      {!notesOpen && (
+        <button
+          type="button"
+          onClick={() => setNotesOpen(true)}
+          aria-label="Open scratchpad notes"
+          style={{
+            position: 'fixed',
+            right: '24px',
+            bottom: '24px',
+            zIndex: 50,
+            backgroundColor: '#0f172a',
+            color: '#ffffff',
+            border: 'none',
+            borderRadius: '24px',
+            padding: '8px 16px',
+            fontSize: '13px',
+            fontWeight: 600,
+            boxShadow: '0 4px 14px rgba(15, 23, 42, 0.2)',
+            cursor: 'pointer',
+            display: 'inline-flex',
+            alignItems: 'center',
+            gap: '6px',
+          }}
+        >
+          <span aria-hidden="true">📝</span>
+          <span>Notes</span>
+          {currentNotes.trim().length > 0 && (
+            <span
+              style={{
+                width: '7px',
+                height: '7px',
+                borderRadius: '50%',
+                backgroundColor: '#38bdf8',
+                display: 'inline-block',
+              }}
+              title="Notes contain text"
+            />
+          )}
+        </button>
+      )}
+
+      <footer style={{ display: 'flex', gap: 8, marginTop: 24, flexWrap: 'wrap', alignItems: 'center' }}>
         {partCount > 1 && (
           <>
             {Array.from({ length: partCount }, (_, i) => (
-              <button
+              <Button
                 key={i}
+                variant={i === index ? 'primary' : 'outline'}
+                size="sm"
                 aria-current={i === index ? 'true' : undefined}
                 aria-label={`${phase === 1 ? 'Passage' : phase === 2 ? 'Task' : 'Part'} ${i + 1}`}
                 onClick={() => goToPart(i)}
               >
                 {phase === 2 ? 'Task' : phase === 1 ? 'Passage' : 'Part'} {i + 1}
-              </button>
+              </Button>
             ))}
-            <button disabled={index === 0} onClick={() => goToPart(index - 1)}>
-              Previous
-            </button>
-            <button disabled={index >= partCount - 1} onClick={() => goToPart(index + 1)}>
-              Next
-            </button>
+            <Button variant="outline" size="sm" disabled={index === 0} onClick={() => goToPart(index - 1)}>
+              ← Previous
+            </Button>
+            <Button variant="outline" size="sm" disabled={index >= partCount - 1} onClick={() => goToPart(index + 1)}>
+              Next →
+            </Button>
           </>
         )}
-        <button onClick={() => void finish()} disabled={busy} style={{ marginLeft: 'auto' }}>
-          {busy ? 'Working…' : 'Finish and review'}
-        </button>
+
+        <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+          {index >= partCount - 1 && nextSection && (
+            <Button
+              variant="primary"
+              size="md"
+              onClick={goToNextSection}
+              disabled={busy}
+            >
+              Continue to {nextSection.label} →
+            </Button>
+          )}
+
+          {(!nextSection || index >= partCount - 1) && (
+            <Button
+              variant={isLastSection ? 'primary' : 'outline'}
+              size="md"
+              onClick={() => void finish()}
+              disabled={busy}
+              title={isLastSection ? 'Submit test and review results' : 'Finish early and review submitted sections'}
+            >
+              {busy ? 'Finishing…' : isLastSection ? 'Finish and Review' : 'Finish Test Early'}
+            </Button>
+          )}
+        </div>
       </footer>
+
+      {/* Forfeit Confirmation Modal */}
+      {showForfeitModal && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="forfeit-title"
+          style={{
+            position: 'fixed',
+            inset: 0,
+            backgroundColor: 'rgba(15, 23, 42, 0.65)',
+            backdropFilter: 'blur(3px)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            zIndex: 1000,
+            padding: '16px',
+          }}
+        >
+          <div
+            style={{
+              backgroundColor: '#ffffff',
+              borderRadius: '16px',
+              padding: '24px 28px',
+              maxWidth: '460px',
+              width: '100%',
+              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
+              border: '1px solid #e2e8f0',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
+              <span
+                style={{
+                  display: 'inline-flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  width: '36px',
+                  height: '36px',
+                  borderRadius: '50%',
+                  backgroundColor: '#fee2e2',
+                  color: '#b91c1c',
+                  fontSize: '18px',
+                  fontWeight: 700,
+                }}
+              >
+                ⚠️
+              </span>
+              <h3 id="forfeit-title" style={{ margin: 0, fontSize: '1.2rem', color: '#0f172a', fontWeight: 800 }}>
+                Forfeit Timed Test?
+              </h3>
+            </div>
+            <p style={{ fontSize: '0.92rem', color: '#475569', lineHeight: 1.5, margin: '0 0 20px' }}>
+              Are you sure you want to forfeit this timed examination? The timer will be stopped immediately, and your
+              current answers will be submitted for scoring and diagnostic feedback.
+            </p>
+            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
+              <Button
+                variant="outline"
+                size="md"
+                onClick={() => setShowForfeitModal(false)}
+                disabled={busy}
+              >
+                Cancel
+              </Button>
+              <Button
+                variant="danger"
+                size="md"
+                onClick={() => void handleForfeit()}
+                disabled={busy}
+                loading={busy}
+              >
+                Confirm & Forfeit
+              </Button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }
