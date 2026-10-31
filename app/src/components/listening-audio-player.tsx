@@ -6,6 +6,7 @@ import {
   downloadAudioModelOnce,
   subscribeAudioProgress,
   synthesizeSpeechAudio,
+  pregenerateListeningAudio,
   type AudioProgressEvent,
 } from '../lib/audio-manager.ts';
 import {
@@ -24,6 +25,7 @@ interface ListeningAudioPlayerProps {
   )[];
   onPlayStateChange?: (playing: boolean) => void;
   timed?: boolean;
+  voiceMap?: Record<string, VoiceMapEntry>;
 }
 
 export function ListeningAudioPlayer({
@@ -31,6 +33,7 @@ export function ListeningAudioPlayer({
   script,
   onPlayStateChange,
   timed = false,
+  voiceMap,
 }: ListeningAudioPlayerProps) {
   const [isPlaying, setIsPlaying] = useState(false);
   const [stage, setStage] = useState<'idle' | 'countdown_intro' | 'playing_script' | 'countdown_review' | 'finished'>('idle');
@@ -41,7 +44,7 @@ export function ListeningAudioPlayer({
   const [downloadProgress, setDownloadProgress] = useState<AudioProgressEvent | null>(null);
   const [showInfoPopover, setShowInfoPopover] = useState(false);
   const [hasPlayedInTimedMode, setHasPlayedInTimedMode] = useState(false);
-  const [activeVoiceMap, setActiveVoiceMap] = useState<Record<string, VoiceMapEntry>>(() => randomizeVoiceMap());
+  const [activeVoiceMap, setActiveVoiceMap] = useState<Record<string, VoiceMapEntry>>(() => voiceMap || randomizeVoiceMap());
   const [currentSpeakerInfo, setCurrentSpeakerInfo] = useState<{ label: string; voiceName: string } | null>(null);
 
   const synthRef = useRef<SpeechSynthesis | null>(null);
@@ -81,6 +84,25 @@ export function ListeningAudioPlayer({
       }
     };
   }, []);
+
+  useEffect(() => {
+    if (voiceMap) {
+      setActiveVoiceMap(voiceMap);
+    }
+  }, [voiceMap]);
+
+  useEffect(() => {
+    if (script && script.length > 0) {
+      const cleanScript = script
+        .filter((item): item is { speaker: string; text: string; intro?: boolean } => 'speaker' in item && 'text' in item)
+        .map((item) => ({ speaker: item.speaker as 'woman' | 'man', text: item.text }));
+      if (cleanScript.length > 0) {
+        void pregenerateListeningAudio(cleanScript, partNumber, activeVoiceMap).catch((e: unknown) => {
+          console.debug('[IELTS Studio] Background audio prefetch note:', e);
+        });
+      }
+    }
+  }, [partNumber, activeVoiceMap, script]);
 
   const clearTimer = () => {
     if (timerRef.current) {
@@ -469,6 +491,15 @@ export function ListeningAudioPlayer({
           <Button
             variant={isPlaying ? 'secondary' : timed && hasPlayedInTimedMode && stage === 'finished' ? 'ghost' : 'primary'}
             size="md"
+            icon={
+              timed && hasPlayedInTimedMode && stage === 'finished'
+                ? '✓'
+                : isPlaying
+                  ? '⏸'
+                  : stage === 'finished' && !timed
+                    ? '↺'
+                    : '▶'
+            }
             disabled={timed && hasPlayedInTimedMode && stage === 'finished'}
             onClick={handleTogglePlay}
             title={
@@ -480,12 +511,12 @@ export function ListeningAudioPlayer({
             }
           >
             {timed && hasPlayedInTimedMode && stage === 'finished'
-              ? '✓ Track Completed (Played 1/1)'
+              ? 'Track Completed (Played 1/1)'
               : isPlaying
-                ? '⏸ Pause Audio'
+                ? 'Pause Audio'
                 : stage === 'finished' && !timed
-                  ? '↺ Replay Audio'
-                  : '▶ Start Listening Track'}
+                  ? 'Replay Audio'
+                  : 'Start Listening Track'}
           </Button>
 
           {/* Voices Pill with Randomize Action */}

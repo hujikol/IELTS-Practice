@@ -95,8 +95,8 @@ export function Review({
       {/* Top Navigation */}
       <header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
         {onBackToDashboard && (
-          <Button variant="outline" size="sm" onClick={onBackToDashboard}>
-            ← Back to Dashboard
+          <Button variant="outline" size="sm" icon="←" onClick={onBackToDashboard}>
+            Back to Dashboard
           </Button>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
@@ -180,20 +180,20 @@ export function Review({
           <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '10px', padding: '12px 16px' }}>
             <div style={{ fontSize: '12px', color: '#94a3b8' }}>Listening</div>
             <div style={{ fontSize: '20px', fontWeight: 800, color: '#f8fafc', marginTop: '2px' }}>
-              {modules?.listening ? `Band ${modules.listening.band.toFixed(1)}` : '—'}
+              {modules?.listening?.band !== null && modules?.listening?.band !== undefined ? `Band ${modules.listening.band.toFixed(1)}` : '—'}
             </div>
             <div style={{ fontSize: '11px', color: '#64748b' }}>
-              {modules?.listening ? `${modules.listening.raw} of ${modules.listening.of} correct` : 'Not taken'}
+              {modules?.listening && modules.listening.band !== null ? `${modules.listening.raw} of ${modules.listening.of} correct` : 'Not taken'}
             </div>
           </div>
 
           <div style={{ backgroundColor: 'rgba(255, 255, 255, 0.04)', borderRadius: '10px', padding: '12px 16px' }}>
             <div style={{ fontSize: '12px', color: '#94a3b8' }}>Reading Academic</div>
             <div style={{ fontSize: '20px', fontWeight: 800, color: '#f8fafc', marginTop: '2px' }}>
-              {modules?.reading ? `Band ${modules.reading.band.toFixed(1)}` : '—'}
+              {modules?.reading?.band !== null && modules?.reading?.band !== undefined ? `Band ${modules.reading.band.toFixed(1)}` : '—'}
             </div>
             <div style={{ fontSize: '11px', color: '#64748b' }}>
-              {modules?.reading ? `${modules.reading.raw} of ${modules.reading.of} correct` : 'Not taken'}
+              {modules?.reading && modules.reading.band !== null ? `${modules.reading.raw} of ${modules.reading.of} correct` : 'Not taken'}
             </div>
           </div>
 
@@ -455,16 +455,21 @@ export function Review({
           {/* Filter Bar */}
           <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '18px' }}>
             <div style={{ display: 'flex', gap: '6px' }}>
-              {(['all', 'wrong', 'unanswered'] as const).map((filter) => (
-                <Button
-                  key={filter}
-                  variant={objectiveFilter === filter ? 'primary' : 'outline'}
-                  size="sm"
-                  onClick={() => setObjectiveFilter(filter)}
-                >
-                  {filter === 'all' ? 'All Items' : filter === 'wrong' ? 'Wrong Only' : 'Unanswered'}
-                </Button>
-              ))}
+              {(['all', 'wrong', 'unanswered'] as const).map((filter) => {
+                const filterIcon = filter === 'all' ? '📋' : filter === 'wrong' ? '❌' : '⏳';
+                const filterLabel = filter === 'all' ? 'All Items' : filter === 'wrong' ? 'Wrong Only' : 'Unanswered';
+                return (
+                  <Button
+                    key={filter}
+                    variant={objectiveFilter === filter ? 'primary' : 'outline'}
+                    size="sm"
+                    icon={filterIcon}
+                    onClick={() => setObjectiveFilter(filter)}
+                  >
+                    {filterLabel}
+                  </Button>
+                );
+              })}
             </div>
             <span style={{ fontSize: '13px', color: '#64748b' }}>
               Showing items with official Cambridge explanations &amp; evidence quotes

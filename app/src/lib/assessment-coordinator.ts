@@ -26,6 +26,7 @@ import {
   calculateSpeechMetrics,
 } from './assessment-ai.ts';
 import { loadProviderConfig, type ProviderConfig } from './providers.ts';
+import { isWritingAttempted, isSpeakingAttempted } from './attempts.ts';
 import type { AttemptRecord, Question } from './types.ts';
 
 /**
@@ -167,7 +168,7 @@ export async function generateFinalReport(
   });
 
   const listeningRaw = scoredListening.filter((s) => s.correct).length;
-  const listeningBand = testData.listening.length > 0 ? rawToListeningBand(listeningRaw) : 1.0;
+  const listeningBand = testData.listening.length > 0 ? rawToListeningBand(listeningRaw) : null;
 
   // 2. Objective Scoring: Reading
   const readingKeyItems = testData.reading.flatMap((b) => b.questions).map(questionToKeyItem);
@@ -189,7 +190,7 @@ export async function generateFinalReport(
   });
 
   const readingRaw = scoredReading.filter((s) => s.correct).length;
-  const readingBand = testData.reading.length > 0 ? rawToReadingBand(readingRaw) : 1.0;
+  const readingBand = testData.reading.length > 0 ? rawToReadingBand(readingRaw) : null;
 
   // 3. AI Personal Notes for Wrong Objective Items (§7.1)
   const allScoredObjective = [...scoredListening, ...scoredReading];
@@ -218,15 +219,13 @@ export async function generateFinalReport(
 
   // 4. Writing Assessment (§5.2 & §7.2)
   const writingTasksResults: FinalReport['review']['writing']['tasks'] = [];
-  const writingTexts = testData.texts || [];
-  const writingAttempted =
-    writingTexts.some((txt) => typeof txt === 'string' && txt.trim().length > 15);
+  const writingAttempted = isWritingAttempted(testData);
 
   let task1Band: number | null = null;
   let task2Band: number | null = null;
   let writingBand: number | null = null;
 
-  const writingCount = testData.writing.length > 0 ? testData.writing.length : (writingAttempted ? writingTexts.length : 0);
+  const writingCount = testData.writing.length > 0 ? testData.writing.length : (writingAttempted ? (testData.texts || []).length : 0);
 
   if (writingAttempted && writingCount > 0) {
     for (let idx = 0; idx < writingCount; idx++) {
@@ -237,10 +236,16 @@ export async function generateFinalReport(
         minimum: taskNumber === 1 ? 150 : 250,
       };
       const userText = testData.texts[idx] || '';
+      const wordCount = userText.trim().split(/\s+/).filter(Boolean).length;
+
+      // Only score tasks where the learner provided substantive input
+      if (wordCount < 20) {
+        continue;
+      }
 
       let assessment: Awaited<ReturnType<typeof scoreWritingTaskWithAI>>;
 
-      if (!skipRemoteAI && config.enabled && userText.trim().length > 30) {
+      if (!skipRemoteAI && config.enabled && wordCount >= 30) {
         assessment = await scoreWritingTaskWithAI(
           taskNumber,
           taskDef.prompt,
@@ -251,14 +256,13 @@ export async function generateFinalReport(
           config,
         );
       } else {
-        const wordCount = userText.trim().split(/\s+/).filter(Boolean).length;
         const targetMin = taskDef.minimum || (taskNumber === 1 ? 150 : 250);
         const isUnderLength = wordCount < targetMin * 0.75;
-        const baseBand = userText.trim().length === 0 ? 1.0 : isUnderLength ? 5.0 : 6.5;
+        const baseBand = isUnderLength ? 5.0 : 6.5;
 
         assessment = {
           task: taskNumber as 1 | 2,
-          confidence: 'medium' as const,
+          confidence: 'low' as const,
           band: baseBand,
           criteria: {
             task_response: {
@@ -320,30 +324,27 @@ export async function generateFinalReport(
 
   // 5. Speaking Assessment (§5.3 & §7.3)
   const speakingPartsResults: FinalReport['review']['speaking']['parts'] = [];
-  const speakingTexts = testData.speakingTexts || [];
-  const speakingRecordings = testData.recordings || {};
-  const speakingAttempted =
-    (speakingTexts.some((txt) => typeof txt === 'string' && txt.trim().length > 5) ||
-      Object.keys(speakingRecordings).length > 0);
+  const speakingAttempted = isSpeakingAttempted(testData);
 
   let speakingBand: number | null = null;
   const speakCount = testData.speaking.length > 0 ? testData.speaking.length : (speakingAttempted ? 3 : 0);
 
   if (speakingAttempted && speakCount > 0) {
-    speakingBand = 6.5;
     for (let idx = 0; idx < speakCount; idx++) {
       const partNum = (idx + 1) as 1 | 2 | 3;
-      const transcript = testData.speakingTexts[idx] || '';
+      const transcript = testData.speakingTexts?.[idx] || '';
       const words = transcript
         .split(/\s+/)
         .filter(Boolean)
         .map((w, i) => ({ w, start: i * 0.4, end: (i + 1) * 0.4, conf: 0.95 }));
 
+      if (words.length === 0) continue;
+
       const metrics = calculateSpeechMetrics(words, 120, partNum === 2 ? 120 : 60);
 
       speakingPartsResults.push({
         part: partNum,
-        transcript: transcript || 'No speech recording submitted.',
+        transcript: transcript,
         metrics,
         highlights: [
           { span: 'um, like', type: 'filler', note: 'Avoid hesitation fillers during transitions.' },
@@ -368,6 +369,11 @@ export async function generateFinalReport(
               ]
             : undefined,
       });
+    }
+
+    if (speakingPartsResults.length > 0) {
+      const totalWords = speakingPartsResults.reduce((sum, p) => sum + (p.transcript ? p.transcript.split(/\s+/).filter(Boolean).length : 0), 0);
+      speakingBand = totalWords >= 150 ? 6.5 : totalWords >= 80 ? 6.0 : totalWords >= 40 ? 5.0 : 4.0;
     }
   }
 
@@ -483,7 +489,7 @@ export async function generateFinalReport(
     modules: {
       listening: { raw: listeningRaw, of: listeningKeyItems.length || 40, band: listeningBand },
       reading: { raw: readingRaw, of: readingKeyItems.length || 40, band: readingBand },
-      writing: writingAttempted
+      writing: writingAttempted && writingBand !== null
         ? {
             band: writingBand,
             task1: task1Band,
@@ -504,10 +510,10 @@ export async function generateFinalReport(
             confidence: 'low',
             status: 'unattempted',
           },
-      speaking: speakingAttempted
+      speaking: speakingAttempted && speakingBand !== null
         ? {
             band: speakingBand,
-            criteria: { FC: 6.5, LR: 6.5, GRA: 6.0, PR: 6.0 },
+            criteria: { FC: speakingBand, LR: speakingBand, GRA: speakingBand, PR: speakingBand },
             confidence: config.enabled && !skipRemoteAI ? 'medium' : 'low',
             status: 'assessed',
           }

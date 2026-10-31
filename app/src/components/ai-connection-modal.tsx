@@ -495,6 +495,7 @@ export function AiConnectionModal({ isOpen, onClose, onConfigChanged }: AiConnec
             variant="secondary"
             onClick={handleTest}
             loading={testing}
+            icon="⚡"
             title="Sends a test ping to verify endpoint and authorization"
           >
             {testing ? 'Testing...' : 'Verify Connection'}
@@ -506,6 +507,7 @@ export function AiConnectionModal({ isOpen, onClose, onConfigChanged }: AiConnec
             </Button>
             <Button
               variant="primary"
+              icon="💾"
               onClick={handleSave}
             >
               Save Configuration

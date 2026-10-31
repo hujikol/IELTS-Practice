@@ -111,14 +111,16 @@ const writeIndex = (ids: string[]): void => {
 
 export function isWritingAttempted(data?: TestData | null): boolean {
   if (!data || !Array.isArray(data.texts)) return false;
-  return data.texts.some((t) => typeof t === 'string' && t.trim().length >= 15);
+  if (data.scope !== undefined && data.scope !== 'full' && data.scope !== 'writing') return false;
+  return data.texts.some((t) => typeof t === 'string' && t.trim().split(/\s+/).filter(Boolean).length >= 20);
 }
 
 export function isSpeakingAttempted(data?: TestData | null): boolean {
   if (!data) return false;
+  if (data.scope !== undefined && data.scope !== 'full' && data.scope !== 'speaking') return false;
   const hasTexts =
     Array.isArray(data.speakingTexts) &&
-    data.speakingTexts.some((t) => typeof t === 'string' && t.trim().length >= 5);
+    data.speakingTexts.some((t) => typeof t === 'string' && t.trim().split(/\s+/).filter(Boolean).length >= 15);
   const hasRecordings = Boolean(data.recordings && Object.keys(data.recordings).length > 0);
   return hasTexts || hasRecordings;
 }
@@ -134,7 +136,7 @@ export function sanitizeAttemptRecord(record: AttemptRecord): AttemptRecord {
   if (record.data.finalReport) {
     const report = record.data.finalReport;
     if (report.modules) {
-      if (!writingAttempted && report.modules.writing?.band !== null) {
+      if (!writingAttempted && (report.modules.writing?.band !== null || report.modules.writing?.status !== 'unattempted')) {
         report.modules.writing = {
           band: null,
           task1: null,
@@ -147,7 +149,7 @@ export function sanitizeAttemptRecord(record: AttemptRecord): AttemptRecord {
         }
         changed = true;
       }
-      if (!speakingAttempted && report.modules.speaking?.band !== null) {
+      if (!speakingAttempted && (report.modules.speaking?.band !== null || report.modules.speaking?.status !== 'unattempted')) {
         report.modules.speaking = {
           band: null,
           confidence: 'low',
@@ -205,7 +207,7 @@ const readRecord = (id: string): AttemptRecord | null => {
   }
 };
 
-const writeRecord = (record: AttemptRecord): void => {
+export const writeRecord = (record: AttemptRecord): void => {
   setStorageItem(`${ATTEMPT_PREFIX}${record.id}`, JSON.stringify(record));
   const ids = readIndex();
   if (!ids.includes(record.id)) {
@@ -533,6 +535,7 @@ export const finishAttempt = async (args: {
     record.data.attemptCapture = buildAttemptCapture(record);
     // Generate instant deterministic report without blocking on external LLM calls
     record.data.finalReport = await generateFinalReport(record, undefined, true);
+    sanitizeAttemptRecord(record);
   } catch (err) {
     console.warn('[IELTS Studio] Warning during assessment generation:', err);
   }

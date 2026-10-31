@@ -248,8 +248,8 @@ export type FinalReport = {
     method: 'mean of 4 modules, IELTS rounding' | 'partial results (incomplete modules)';
   };
   modules: {
-    listening?: { raw: number; of: number; band: number };
-    reading?: { raw: number; of: number; band: number };
+    listening?: { raw: number; of: number; band: number | null };
+    reading?: { raw: number; of: number; band: number | null };
     grammar?: { raw: number; of: number; accuracy: number; band: number };
     writing?: {
       band: number | null;

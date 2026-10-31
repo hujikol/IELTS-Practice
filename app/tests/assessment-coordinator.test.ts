@@ -26,12 +26,38 @@ test('assessment-coordinator: unattempted writing and speaking yields null bands
 
   const report = await generateFinalReport(record, undefined, true);
   assert.equal(report.attempt_id, 'test_att_1');
+  assert.equal(report.modules.listening?.band, null);
+  assert.equal(report.modules.reading?.band, null);
   assert.equal(report.modules.writing?.band, null);
   assert.equal(report.modules.writing?.status, 'unattempted');
   assert.equal(report.modules.speaking?.band, null);
   assert.equal(report.modules.speaking?.status, 'unattempted');
   assert.equal(report.overall.band, null);
   assert.equal(report.overall.method, 'partial results (incomplete modules)');
+});
+
+test('assessment-coordinator: short placeholder text (< 20 words) is unattempted and does not fabricate band 4.0', async () => {
+  const data = emptyTest('full', 0, 'balanced', { provider: 'manual', model: 'mock', createdAt: Date.now() });
+  data.texts[0] = 'hello test only five words';
+  assert.equal(isWritingAttempted(data), false);
+
+  const record: AttemptRecord = {
+    id: 'test_short_text',
+    owner_id: 'local',
+    created_at: Date.now(),
+    updated_at: Date.now(),
+    revision: 1,
+    mode: 'untimed',
+    status: 'completed',
+    data,
+    requests: {},
+    imports: {},
+    import_history: {},
+  };
+
+  const report = await generateFinalReport(record, undefined, true);
+  assert.equal(report.modules.writing?.band, null);
+  assert.equal(report.modules.writing?.status, 'unattempted');
 });
 
 test('assessment-coordinator: attempted writing yields calculated writing band', async () => {

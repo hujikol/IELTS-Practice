@@ -318,11 +318,11 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
             </label>
             <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
               {[
-                { scope: 'full' as Scope, label: 'Full Mock Test (All 4 Modules)', count: 0 },
-                { scope: 'listening' as Scope, label: 'Listening Only', count: 4 },
-                { scope: 'reading' as Scope, label: 'Reading Only', count: 3 },
-                { scope: 'writing' as Scope, label: 'Writing Only', count: 2 },
-                { scope: 'speaking' as Scope, label: 'Speaking Only', count: 3 },
+                { scope: 'full' as Scope, label: 'Full Mock Test (All 4 Modules)', icon: '📚', count: 0 },
+                { scope: 'listening' as Scope, label: 'Listening Only', icon: '🎧', count: 4 },
+                { scope: 'reading' as Scope, label: 'Reading Only', icon: '📖', count: 3 },
+                { scope: 'writing' as Scope, label: 'Writing Only', icon: '✍️', count: 2 },
+                { scope: 'speaking' as Scope, label: 'Speaking Only', icon: '🗣️', count: 3 },
               ].map((s) => {
                 const isSelected = selectedScope === s.scope;
                 return (
@@ -330,6 +330,7 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                     key={s.scope}
                     variant={isSelected ? 'primary' : 'outline'}
                     size="md"
+                    icon={s.icon}
                     onClick={() => {
                       setSelectedScope(s.scope);
                       setSelectedPart(s.count > 0 ? 1 : 0);
@@ -345,18 +346,20 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
           {/* Action Buttons */}
           <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
             <Button
-              variant="outline"
+              variant="secondary"
               size="lg"
               loading={busy}
+              icon="🎧"
               onClick={handleLaunchConversationalListening}
               title="Practice official 2-way dialogue with Kokoro FP32 neural speech synthesis"
             >
-              🎧 Practice 2-Way Conversational Listening →
+              Practice 2-Way Conversational Listening →
             </Button>
             <Button
               variant="primary"
               size="lg"
               loading={busy}
+              icon="🚀"
               onClick={handleCreateTest}
             >
               Configure &amp; Generate Test →
@@ -427,6 +430,7 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                       <Button
                         variant={t.status === 'active' || isComplete ? 'primary' : 'secondary'}
                         size="sm"
+                        icon={t.status === 'active' || isComplete ? '▶' : '📋'}
                         onClick={(e) => {
                           e.stopPropagation();
                           onOpenAttempt(t.id);
@@ -437,10 +441,11 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                       <Button
                         variant="ghost"
                         size="sm"
+                        icon="🗑️"
                         onClick={(e) => handleDelete(t.id, e)}
                         title="Delete test permanently"
                       >
-                        ✕
+                        Delete
                       </Button>
                     </div>
                   </article>
@@ -607,8 +612,9 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
 
                       <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
                         <Button
-                          variant="primary"
+                          variant="secondary"
                           size="sm"
+                          icon="📊"
                           onClick={(e) => {
                             e.stopPropagation();
                             onOpenAttempt(t.id);
@@ -619,10 +625,11 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                         <Button
                           variant="ghost"
                           size="sm"
+                          icon="🗑️"
                           onClick={(e) => handleDelete(t.id, e)}
                           title="Delete test"
                         >
-                          ✕
+                          Delete
                         </Button>
                       </div>
                     </div>

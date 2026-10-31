@@ -469,34 +469,36 @@ export function Player({
         </div>
         <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
           {/* Announced without moving focus: a busy state must not steal the keyboard. */}
-          <span aria-live="polite" role="status" style={{ fontSize: 13 }}>
+          <span aria-live="polite" role="status" style={{ fontSize: 13, color: '#475569' }}>
             {statusText[state.status]}
           </span>
           {state.status === 'failed' && (
-            <Button variant="danger" size="sm" onClick={() => void session.flush().catch(() => undefined)}>
+            <Button variant="danger" size="sm" icon="🔄" onClick={() => void session.flush().catch(() => undefined)}>
               Retry save
             </Button>
           )}
           {state.status === 'conflict' && (
-            <Button variant="outline" size="sm" onClick={() => void reload()} disabled={busy}>
+            <Button variant="outline" size="sm" icon="↻" onClick={() => void reload()} disabled={busy}>
               Reload
             </Button>
           )}
           <Button
-            variant={notesOpen ? 'primary' : 'outline'}
+            variant={notesOpen ? 'accent' : 'outline'}
             size="sm"
+            icon="📝"
             aria-pressed={notesOpen}
             onClick={() => setNotesOpen(!notesOpen)}
           >
             Notes
           </Button>
-          <Button variant="outline" size="sm" onClick={() => void saveAndExit()} disabled={busy}>
+          <Button variant="outline" size="sm" icon="💾" onClick={() => void saveAndExit()} disabled={busy}>
             {busy ? 'Saving…' : 'Save & exit'}
           </Button>
           {timed && (
             <Button
               variant="danger"
               size="sm"
+              icon="🏳️"
               onClick={() => setShowForfeitModal(true)}
               disabled={busy}
               title="End the timed test immediately and view your diagnostic report"
@@ -505,11 +507,11 @@ export function Player({
             </Button>
           )}
           {timed ? (
-            <strong aria-label={`Time remaining ${state.timer.remaining} seconds`} style={{ fontVariantNumeric: 'tabular-nums' }}>
-              {labelOf(state.timer.remaining)}
+            <strong aria-label={`Time remaining ${state.timer.remaining} seconds`} style={{ fontVariantNumeric: 'tabular-nums', color: '#1e293b' }}>
+              ⏱ {labelOf(state.timer.remaining)}
             </strong>
           ) : (
-            <span style={{ fontSize: 13, color: '#64748b', fontWeight: 500 }}>No time limit</span>
+            <span style={{ fontSize: 13, color: '#64748b', fontWeight: 500 }}>∞ No time limit</span>
           )}
         </div>
       </header>
@@ -530,6 +532,7 @@ export function Player({
         >
           {availableSections.map((sec, idx) => {
             const isActive = sec.phase === phase;
+            const sectionIcon = sec.phase === 0 ? '🎧' : sec.phase === 1 ? '📖' : sec.phase === 2 ? '✍️' : '🗣️';
             return (
               <button
                 key={sec.phase}
@@ -541,23 +544,24 @@ export function Player({
                   gap: 8,
                   padding: '6px 14px',
                   borderRadius: 8,
-                  border: 'none',
-                  backgroundColor: isActive ? '#0f172a' : 'transparent',
+                  border: isActive ? '1px solid #1d4ed8' : '1px solid #e2e8f0',
+                  backgroundColor: isActive ? '#2563eb' : '#ffffff',
                   color: isActive ? '#ffffff' : '#475569',
                   fontSize: 13,
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
+                  boxShadow: isActive ? '0 2px 6px rgba(37, 99, 235, 0.25)' : 'none',
                   transition: 'all 0.15s ease',
                   whiteSpace: 'nowrap',
                 }}
               >
-                <span>{idx + 1}. {sec.label}</span>
+                <span>{sectionIcon} {idx + 1}. {sec.label}</span>
                 <span
                   style={{
                     fontSize: 11,
                     padding: '2px 7px',
                     borderRadius: 9999,
-                    backgroundColor: isActive ? 'rgba(255,255,255,0.2)' : '#e2e8f0',
+                    backgroundColor: isActive ? 'rgba(255,255,255,0.22)' : '#f1f5f9',
                     color: isActive ? '#ffffff' : '#64748b',
                     fontWeight: 600,
                   }}
@@ -635,6 +639,7 @@ export function Player({
                     partNumber={index + 1}
                     script={data.listening[index]?.script || []}
                     timed={timed}
+                    voiceMap={attempt.voice_map}
                   />
                 </div>
                 {block.visual && (
@@ -700,16 +705,24 @@ export function Player({
                       style={{
                         padding: '6px 14px',
                         borderRadius: '6px',
-                        border: 'none',
-                        backgroundColor: isSelected ? '#0f172a' : '#f1f5f9',
-                        color: isSelected ? '#ffffff' : '#475569',
+                        border: isSelected ? '1px solid #1d4ed8' : '1px solid #dbeafe',
+                        backgroundColor: isSelected ? '#2563eb' : '#eff6ff',
+                        color: isSelected ? '#ffffff' : '#1d4ed8',
                         fontSize: '12px',
                         fontWeight: 600,
                         cursor: 'pointer',
+                        boxShadow: isSelected ? '0 2px 4px rgba(37, 99, 235, 0.2)' : 'none',
+                        transition: 'all 0.15s ease',
+                        display: 'inline-flex',
+                        alignItems: 'center',
+                        gap: '6px',
                       }}
                     >
-                      Questions {numberOf(questions[g.start - 1] ?? questions[0]!, offsetOf(index))}–
-                      {numberOf(questions[g.end - 1] ?? questions[0]!, offsetOf(index))}
+                      <span aria-hidden="true">📋</span>
+                      <span>
+                        Questions {numberOf(questions[g.start - 1] ?? questions[0]!, offsetOf(index))}–
+                        {numberOf(questions[g.end - 1] ?? questions[0]!, offsetOf(index))}
+                      </span>
                     </button>
                   );
                 })}
@@ -1289,18 +1302,19 @@ export function Player({
             right: '24px',
             bottom: '68px',
             zIndex: 35,
-            backgroundColor: '#0f172a',
+            backgroundColor: '#2563eb',
             color: '#ffffff',
             border: 'none',
             borderRadius: '24px',
-            padding: '8px 16px',
+            padding: '8px 18px',
             fontSize: '13px',
             fontWeight: 600,
-            boxShadow: '0 4px 14px rgba(15, 23, 42, 0.25)',
+            boxShadow: '0 4px 14px rgba(37, 99, 235, 0.3)',
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
             gap: '6px',
+            transition: 'all 0.15s ease',
           }}
         >
           <span aria-hidden="true">📝</span>
@@ -1311,7 +1325,7 @@ export function Player({
                 width: '7px',
                 height: '7px',
                 borderRadius: '50%',
-                backgroundColor: '#38bdf8',
+                backgroundColor: '#fcd34d',
                 display: 'inline-block',
               }}
               title="Notes contain text"
@@ -1361,11 +1375,11 @@ export function Player({
             ))}
           {partCount > 1 && (
             <>
-              <Button variant="outline" size="sm" disabled={index === 0} onClick={() => goToPart(index - 1)}>
-                ← Previous
+              <Button variant="outline" size="sm" icon="←" disabled={index === 0} onClick={() => goToPart(index - 1)}>
+                Previous
               </Button>
               <Button variant="outline" size="sm" disabled={index >= partCount - 1} onClick={() => goToPart(index + 1)}>
-                Next →
+                Next <span aria-hidden="true">→</span>
               </Button>
             </>
           )}
@@ -1411,11 +1425,11 @@ export function Player({
                     fontSize: '12px',
                     fontWeight: isAnswered ? 700 : 500,
                     backgroundColor: isAnswered ? '#eff6ff' : '#ffffff',
-                    color: isAnswered ? '#1d4ed8' : '#334155',
+                    color: isAnswered ? '#1d4ed8' : '#475569',
                     border: isMarked
                       ? '2px solid #f59e0b'
                       : isInCurrentGroup
-                        ? '2px solid #0f172a'
+                        ? '2px solid #2563eb'
                         : isAnswered
                           ? '1px solid #93c5fd'
                           : '1px solid #cbd5e1',
@@ -1481,14 +1495,15 @@ export function Player({
               onClick={goToNextSection}
               disabled={busy}
             >
-              Continue to {nextSection.label} →
+              Continue to {nextSection.label} <span aria-hidden="true">→</span>
             </Button>
           )}
 
           {(!nextSection || index >= partCount - 1) && (
             <Button
-              variant={isLastSection ? 'primary' : 'outline'}
+              variant={isLastSection ? 'success' : 'outline'}
               size="md"
+              icon={isLastSection ? '🎓' : '✓'}
               onClick={() => void finish()}
               disabled={busy}
               title={isLastSection ? 'Submit test and review results' : 'Finish early and review submitted sections'}
@@ -1565,6 +1580,7 @@ export function Player({
               <Button
                 variant="danger"
                 size="md"
+                icon="⚠️"
                 onClick={() => void handleForfeit()}
                 disabled={busy}
                 loading={busy}

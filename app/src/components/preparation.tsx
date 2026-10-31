@@ -7,6 +7,7 @@ import {
   listAttempts,
   loadAttempt,
   startAttempt,
+  writeRecord,
   type AttemptRecord,
   type AttemptSummary,
 } from '../lib/attempts.ts';
@@ -18,6 +19,8 @@ import { callProviderChat, loadProviderConfig, type ProviderConfig } from '../li
 import { AiConnectionModal, AiConnectionStatusPill } from './ai-connection.tsx';
 import { applyMaterial } from '../lib/material.ts';
 import { CONVERSATIONAL_LISTENING_BLOCK } from '../lib/sample-material.ts';
+import { pregenerateListeningAudio } from '../lib/audio-manager.ts';
+import { randomizeVoiceMap } from '../lib/voices.ts';
 import { Button } from './ui/button.tsx';
 import type { ErrorCode, PrepJob, Scope, TestData } from '../lib/types.ts';
 
@@ -257,6 +260,7 @@ export function Preparation({
         jobs[0];
       if (!listeningJob) return;
 
+      const vMap = record.voice_map || randomizeVoiceMap();
       const nextTestData = applyMaterial(record.data, listeningJob, CONVERSATIONAL_LISTENING_BLOCK);
       const updated = await commitImport({
         attempt_id: record.id,
@@ -270,8 +274,20 @@ export function Preparation({
         replace_confirmed: true,
       });
 
+      updated.voice_map = vMap;
+      writeRecord(updated);
+
+      setNotice('Synthesizing FP32 neural audio for 2-Way Conversational Listening...');
+      if (CONVERSATIONAL_LISTENING_BLOCK.script) {
+        try {
+          await pregenerateListeningAudio(CONVERSATIONAL_LISTENING_BLOCK.script, 1, vMap);
+        } catch (ttsErr) {
+          console.warn('[IELTS Studio] Notice during audio pregeneration:', ttsErr);
+        }
+      }
+
       setRecord(updated);
-      setNotice('✓ 2-Way Conversational Listening section loaded with verified FP32 dialogue!');
+      setNotice('✓ 2-Way Conversational Listening loaded with pre-rendered FP32 neural voices!');
       await refresh();
     } catch (e) {
       setError((e as Error).message || 'Failed to load conversational listening section.');
@@ -365,6 +381,28 @@ export function Preparation({
 
           currentRecord = updated;
           setRecord(updated);
+
+          // If a listening job was prepared, pre-render the voices now so the player has 0ms latency
+          if (currentJob.section === 'listening') {
+            const listeningBlock = currentRecord.data.listening[currentJob.part - 1] || currentRecord.data.listening[0];
+            const script = listeningBlock?.script;
+            if (Array.isArray(script) && script.length > 0) {
+              const vMap = currentRecord.voice_map || randomizeVoiceMap();
+              if (!currentRecord.voice_map) {
+                currentRecord.voice_map = vMap;
+                writeRecord(currentRecord);
+              }
+              setPipelineStepMessage(`Synthesizing FP32 neural audio for ${currentJob.label} (0/${script.length})...`);
+              try {
+                await pregenerateListeningAudio(script, currentJob.part, vMap, (done, total) => {
+                  setPipelineStepMessage(`Synthesizing FP32 neural audio for ${currentJob.label} (${done}/${total})...`);
+                });
+              } catch (audioErr) {
+                console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
+              }
+            }
+          }
+
           await refresh();
         } catch (jobErr) {
           console.group(`❌ [IELTS Studio] Batch Generation Error on Step ${i + 1}/${jobs.length}: ${currentJob.label} (${currentJob.key})`);
@@ -469,6 +507,25 @@ export function Preparation({
         });
 
         setRecord(updated);
+
+        if (targetJob.section === 'listening') {
+          const listeningBlock = updated.data.listening[targetJob.part - 1] || updated.data.listening[0];
+          const script = listeningBlock?.script;
+          if (Array.isArray(script) && script.length > 0) {
+            const vMap = updated.voice_map || randomizeVoiceMap();
+            if (!updated.voice_map) {
+              updated.voice_map = vMap;
+              writeRecord(updated);
+            }
+            setNotice(`Synthesizing FP32 neural audio for ${targetJob.label}...`);
+            try {
+              await pregenerateListeningAudio(script, targetJob.part, vMap);
+            } catch (audioErr) {
+              console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
+            }
+          }
+        }
+
         setNotice(`✓ Saved ${targetJob.label}.`);
         await refresh();
       } catch (err) {
@@ -581,6 +638,25 @@ export function Preparation({
         replace_confirmed: confirmReplace || prepared.includes(modalTargetJob.key),
       });
       setRecord(updated);
+
+      if (modalTargetJob.section === 'listening') {
+        const listeningBlock = updated.data.listening[modalTargetJob.part - 1] || updated.data.listening[0];
+        const script = listeningBlock?.script;
+        if (Array.isArray(script) && script.length > 0) {
+          const vMap = updated.voice_map || randomizeVoiceMap();
+          if (!updated.voice_map) {
+            updated.voice_map = vMap;
+            writeRecord(updated);
+          }
+          setNotice(`Synthesizing FP32 neural audio for ${modalTargetJob.label}...`);
+          try {
+            await pregenerateListeningAudio(script, modalTargetJob.part, vMap);
+          } catch (audioErr) {
+            console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
+          }
+        }
+      }
+
       setCandidate(null);
       setConfirmReplace(false);
       setPasted('');
@@ -615,8 +691,8 @@ export function Preparation({
     return (
       <main style={{ fontFamily: 'system-ui, -apple-system, sans-serif', padding: '32px 24px', maxWidth: '880px', margin: '0 auto' }}>
         {onBack && (
-          <Button variant="outline" size="sm" onClick={onBack} style={{ marginBottom: '20px' }}>
-            ← Back to Dashboard
+          <Button variant="outline" size="sm" icon="←" onClick={onBack} style={{ marginBottom: '20px' }}>
+            Back to Dashboard
           </Button>
         )}
         <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
@@ -658,6 +734,7 @@ export function Preparation({
                 <Button
                   variant="primary"
                   size="md"
+                  icon="✨"
                   disabled={busy !== null}
                   onClick={() => create(s.value, s.part, 'untimed')}
                   style={{ flex: 1 }}
@@ -689,15 +766,15 @@ export function Preparation({
       {/* Top Navigation Bar */}
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginBottom: '24px' }}>
         {onBack && (
-          <Button variant="outline" size="sm" onClick={onBack}>
-            ← Back to Dashboard
+          <Button variant="outline" size="sm" icon="←" onClick={onBack}>
+            Back to Dashboard
           </Button>
         )}
         <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
           <AiConnectionStatusPill onClick={() => setShowAiModal(true)} config={providerConfig} />
           {isComplete && (
-            <Button variant="success" size="sm" onClick={handleStartPracticeNow}>
-              🚀 Start Practice Now
+            <Button variant="success" size="sm" icon="🚀" onClick={handleStartPracticeNow}>
+              Start Practice Now
             </Button>
           )}
         </div>
@@ -739,12 +816,13 @@ export function Preparation({
           </div>
 
           {/* ONE BUTTON TO GENERATE ALL */}
-          <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
             <Button
               variant={isComplete ? 'secondary' : 'primary'}
               size="lg"
               loading={isGeneratingAll}
               disabled={isGeneratingAll || busy !== null}
+              icon={isGeneratingAll ? undefined : isComplete ? '↺' : '⚡'}
               onClick={handleGenerateAll}
               title={
                 !providerConfig.enabled || !providerConfig.verified
@@ -755,24 +833,25 @@ export function Preparation({
               {isGeneratingAll
                 ? 'Generating Pipeline...'
                 : isComplete
-                  ? '↺ Regenerate All Materials'
-                  : '⚡ Generate Complete Test (1-Click)'}
+                  ? 'Regenerate All Materials'
+                  : 'Generate Complete Test (1-Click)'}
             </Button>
 
             {jobs.some((j) => j.section === 'listening' && !record.data.prepared?.includes(j.key)) && (
               <Button
-                variant="outline"
+                variant="secondary"
                 size="lg"
+                icon="🎧"
                 disabled={isGeneratingAll || busy !== null}
                 onClick={handleLoadConversationalListening}
                 title="Instantly load authentic 2-way conversation dialogue with 10 questions"
               >
-                🎧 Load 2-Way Conversational Listening
+                Load 2-Way Conversational Listening
               </Button>
             )}
 
             {isComplete && (
-              <Button variant="success" size="lg" onClick={handleStartPracticeNow}>
+              <Button variant="success" size="lg" icon="▶" onClick={handleStartPracticeNow}>
                 Start Practice Now →
               </Button>
             )}
@@ -1086,6 +1165,7 @@ export function Preparation({
                   <Button
                     variant="outline"
                     size="sm"
+                    icon="📝"
                     disabled={isGeneratingAll || (busy === 'generate' && singleGeneratingJobKey === j.key)}
                     onClick={() => void openManualModal(j)}
                     title={`View official prompt or paste response manually for ${j.label}`}
@@ -1094,9 +1174,10 @@ export function Preparation({
                   </Button>
 
                   <Button
-                    variant={isJobPrepared ? 'outline' : 'primary'}
+                    variant={isJobPrepared ? 'secondary' : 'primary'}
                     size="sm"
                     disabled={isGeneratingAll || busy !== null}
+                    icon={isCurrentlyGenerating ? undefined : isJobPrepared ? '↺' : '⚡'}
                     onClick={() => void handleGenerateSingleJob(j)}
                   >
                     {isCurrentlyGenerating ? (

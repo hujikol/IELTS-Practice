@@ -1,6 +1,5 @@
 1. change the generate button to queued when hitting the generate for all section button
 2. add a background execution for the test generation so if backing into the dasboard or navigating to different page it wont get interupted, or adding a modal to have a confirmation that moving pages will discard the generation when it is still on progress
-4. Update the kokoro TTS to have a better voice model
 5. Add a Speech to text model to generate speaking transcript to be submited along with the user speaking submission https://github.com/cjpais/Handy or 
 6. 
 
