@@ -258,6 +258,17 @@ export async function isAudioModelCached(targetModel?: TtsModelType): Promise<bo
   return false;
 }
 
+async function loadKokoroModule(): Promise<typeof import('kokoro-js')> {
+  try {
+    return await import('kokoro-js');
+  } catch (err) {
+    console.warn('[KokoroTTS] Initial dynamic import failed, retrying module resolution...', err);
+    // Allow Vite dependency pre-bundling to settle if triggered in dev
+    await new Promise((resolve) => setTimeout(resolve, 500));
+    return await import('kokoro-js');
+  }
+}
+
 /**
  * Downloads and initializes the neural audio model once with progress tracking,
  * using the configured precision (FP32, FP16, Q8, or Q4) and compute device (WebGPU by default, or CPU/WASM).
@@ -297,8 +308,8 @@ export async function downloadAudioModelOnce(
 
   downloadPromise = (async () => {
     try {
-      // Dynamic import of kokoro-js to avoid blocking initial bundle
-      const { KokoroTTS } = await import('kokoro-js');
+      // Dynamic import of kokoro-js with retry resilience for Vite dev server prebundling
+      const { KokoroTTS } = await loadKokoroModule();
 
       let deviceToUse: 'webgpu' | 'wasm' = targetDevice === 'webgpu' ? 'webgpu' : 'wasm';
       const hasGpu = typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu;

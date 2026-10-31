@@ -6,6 +6,9 @@ export default defineConfig({
   plugins: [react()],
   clearScreen: false,
   server: { port: 5173, strictPort: true },
+  optimizeDeps: {
+    include: ['kokoro-js'],
+  },
   define: {
     'process.env.EXPLABS_API_KEY': JSON.stringify(process.env.EXPLABS_API_KEY || ''),
   },
