@@ -562,216 +562,100 @@ export function Player({
         </div>
       )}
 
-      <div
-        style={{
-          display: 'flex',
-          gap: 24,
-          alignItems: 'flex-start',
-          marginTop: 18,
-          position: 'relative',
-        }}
-      >
-        {/* Left Side: Question Set & Marked Indicator (Opposite of Notes) */}
-        {questions.length > 0 && (
-          <aside
-            aria-label="Question navigator and marked items"
+      {/* 2-Section Split Layout for Listening & Reading */}
+      {block && (
+        <div
+          className="ielts-split-container"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            width: '100%',
+            overflow: 'hidden',
+          }}
+        >
+          {/* Left Section: Reading Passage or Listening Audio Briefing */}
+          <section
+            aria-label={phase === 1 ? 'Reading passage' : 'Listening track and briefing'}
+            className="ielts-split-left ielts-pane-scroll"
             style={{
-              width: '210px',
-              flexShrink: 0,
-              position: 'sticky',
-              top: '16px',
+              height: '100%',
+              overflowY: 'auto',
+              padding: '24px 32px',
+              borderRight: '1px solid #e2e8f0',
               backgroundColor: '#ffffff',
-              border: '1px solid #cbd5e1',
-              borderRadius: '8px',
-              padding: '14px',
               boxSizing: 'border-box',
             }}
           >
-            <div
-              style={{
-                display: 'flex',
-                justifyContent: 'space-between',
-                alignItems: 'center',
-                marginBottom: '10px',
-              }}
-            >
-              <strong style={{ fontSize: '13px', color: '#0f172a' }}>Questions</strong>
-              <span
-                style={{
-                  fontSize: '11px',
-                  fontWeight: 600,
-                  color: '#2563eb',
-                  backgroundColor: '#eff6ff',
-                  padding: '2px 6px',
-                  borderRadius: '4px',
-                }}
-              >
-                {answeredCount}/{totalQuestions}
-              </span>
-            </div>
-
-            {/* Marked for Review Indicator */}
-            <div
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'space-between',
-                padding: '6px 10px',
-                backgroundColor: markedCount > 0 ? '#fffbeb' : '#f8fafc',
-                border: markedCount > 0 ? '1px solid #fde68a' : '1px solid #e2e8f0',
-                borderRadius: '6px',
-                marginBottom: '12px',
-                fontSize: '11px',
-                color: markedCount > 0 ? '#b45309' : '#64748b',
-              }}
-            >
-              <span style={{ display: 'inline-flex', alignItems: 'center', gap: '4px' }}>
-                <span>⚑</span>
-                <span>Marked:</span>
-              </span>
-              <strong style={{ fontWeight: 700 }}>{markedCount}</strong>
-            </div>
-
-            {/* Question Buttons Grid */}
-            <nav
-              aria-label="Question list"
-              style={{
-                display: 'grid',
-                gridTemplateColumns: 'repeat(4, 1fr)',
-                gap: '6px',
-              }}
-            >
-              {questions.map((q, i) => {
-                const num = numberOf(q, offsetOf(index));
-                const isAnswered = answered(q.id);
-                const isMarked = marked.includes(q.id);
-                const isInCurrentGroup = activeGroup && i >= activeGroup.start - 1 && i < activeGroup.end;
-                return (
-                  <button
-                    key={q.id}
-                    type="button"
-                    aria-label={`Question ${num}${isMarked ? ', marked for review' : ''}${isAnswered ? ', answered' : ', not answered'}`}
-                    onClick={() => {
-                      const gi = groups.findIndex((g) => i >= g.start - 1 && i < g.end);
-                      if (gi >= 0) setGroup(gi);
-                      if (isMapQuestion) {
-                        setSelectedMapQuestionId(q.id);
-                      } else {
-                        document.getElementById(`q-${q.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
-                      }
-                    }}
-                    style={{
-                      height: '32px',
-                      padding: '0 4px',
-                      borderRadius: '6px',
-                      fontSize: '12px',
-                      fontWeight: isAnswered ? 700 : 500,
-                      backgroundColor: isAnswered ? '#eff6ff' : '#ffffff',
-                      color: isAnswered ? '#1d4ed8' : '#334155',
-                      border: isMarked
-                        ? '2px solid #f59e0b'
-                        : isInCurrentGroup
-                          ? '2px solid #0f172a'
-                          : isAnswered
-                            ? '1px solid #93c5fd'
-                            : '1px solid #cbd5e1',
-                      cursor: 'pointer',
-                      position: 'relative',
-                      display: 'inline-flex',
-                      alignItems: 'center',
-                      justifyContent: 'center',
-                      transition: 'all 0.15s ease',
-                    }}
-                    title={`Question ${num}: ${isAnswered ? 'Answered' : 'Unanswered'}${isMarked ? ' (Marked for review)' : ''}`}
-                  >
-                    {num}
-                    {isMarked && (
-                      <span
-                        style={{
-                          position: 'absolute',
-                          top: '-3px',
-                          right: '-3px',
-                          width: '7px',
-                          height: '7px',
-                          borderRadius: '50%',
-                          backgroundColor: '#f59e0b',
-                        }}
-                      />
-                    )}
-                  </button>
-                );
-              })}
-            </nav>
-
-            {/* Quick Status Legend */}
-            <div
-              style={{
-                marginTop: '12px',
-                paddingTop: '10px',
-                borderTop: '1px solid #e2e8f0',
-                fontSize: '10.5px',
-                color: '#64748b',
-                display: 'flex',
-                flexDirection: 'column',
-                gap: '5px',
-              }}
-            >
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span
-                  style={{
-                    width: '10px',
-                    height: '10px',
-                    borderRadius: '2px',
-                    backgroundColor: '#eff6ff',
-                    border: '1px solid #3b82f6',
-                    display: 'inline-block',
-                  }}
-                />
-                <span>Answered</span>
-              </div>
-              <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-                <span
-                  style={{
-                    width: '10px',
-                    height: '10px',
-                    borderRadius: '2px',
-                    backgroundColor: '#ffffff',
-                    border: '2px solid #f59e0b',
-                    display: 'inline-block',
-                  }}
-                />
-                <span>Marked for review</span>
-              </div>
-            </div>
-          </aside>
-        )}
-
-        {/* Center: Main Question and Answer Area */}
-        <div style={{ flex: 1, minWidth: 0 }}>
-
-      {block && (
-        <div style={{ display: 'flex', gap: 16, alignItems: 'flex-start', flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 420px' }}>
             {phase === 1 ? (
-              <article aria-label="Reading passage" style={{ border: '1px solid #cbd5e1', padding: 16, borderRadius: 8, background: '#ffffff' }}>
-                <h2 style={{ marginTop: 0, fontSize: '1.25rem', color: '#0f172a' }}>{block.title}</h2>
-                {block.text.split('\n\n').map((p, i) => (
-                  <p key={i} style={{ lineHeight: 1.6, color: '#334155', fontSize: '0.95rem' }}>{p}</p>
-                ))}
+              <article aria-label="Reading passage">
+                <h2 style={{ marginTop: 0, fontSize: '1.4rem', color: '#0f172a', fontWeight: 800, lineHeight: 1.3 }}>
+                  {block.title}
+                </h2>
+                {block.visual && (
+                  <div style={{ margin: '16px 0' }}>
+                    <VisualRenderer visual={block.visual} />
+                  </div>
+                )}
+                <div style={{ marginTop: 16 }}>
+                  {block.text.split('\n\n').map((p, i) => (
+                    <p key={i} style={{ lineHeight: 1.7, color: '#334155', fontSize: '1rem', marginBottom: 16 }}>
+                      {p}
+                    </p>
+                  ))}
+                </div>
               </article>
             ) : (
-              <article aria-label="Listening" style={{ border: '1px solid #cbd5e1', padding: 16, borderRadius: 8, background: '#ffffff' }}>
-                <h2 style={{ marginTop: 0, fontSize: '1.25rem', color: '#0f172a' }}>{block.title}</h2>
-                <ListeningAudioPlayer
-                  partNumber={index + 1}
-                  script={data.listening[index]?.script || []}
-                  timed={timed}
-                />
-                <p style={{ color: '#64748b', fontSize: '0.85rem', fontStyle: 'italic', margin: '8px 0 0' }}>
-                  Exam condition: The transcript is hidden on all modes during testing. Full transcript and evidence quotes are available in post-test review.
-                </p>
+              <article aria-label="Listening audio track">
+                <h2 style={{ marginTop: 0, fontSize: '1.4rem', color: '#0f172a', fontWeight: 800, lineHeight: 1.3 }}>
+                  {block.title}
+                </h2>
+                <div style={{ marginTop: 16 }}>
+                  <ListeningAudioPlayer
+                    partNumber={index + 1}
+                    script={data.listening[index]?.script || []}
+                    timed={timed}
+                  />
+                </div>
+                {block.visual && (
+                  <div style={{ marginTop: 16 }}>
+                    <VisualRenderer visual={block.visual} />
+                  </div>
+                )}
+                <div
+                  style={{
+                    marginTop: 24,
+                    padding: '14px 16px',
+                    borderRadius: '8px',
+                    backgroundColor: '#f8fafc',
+                    border: '1px solid #e2e8f0',
+                    fontSize: '0.86rem',
+                    color: '#64748b',
+                    lineHeight: 1.6,
+                  }}
+                >
+                  <strong style={{ color: '#334155', display: 'block', marginBottom: 4 }}>
+                    Official Computer-Delivered IELTS Conditions:
+                  </strong>
+                  Listen carefully to the recording and answer the questions on the right. You may make rough notes at any time using the Notes tool. In accordance with examination regulations, the written transcript remains hidden throughout test execution.
+                </div>
               </article>
             )}
+          </section>
+
+          {/* Right Section: Question List & Interactive Inputs */}
+          <section
+            aria-label="Questions list"
+            className="ielts-split-right ielts-pane-scroll"
+            style={{
+              height: '100%',
+              overflowY: 'auto',
+              padding: '24px 32px',
+              backgroundColor: '#ffffff',
+              boxSizing: 'border-box',
+            }}
+          >
 
             {groups.length > 1 && (
               <div
@@ -1047,26 +931,121 @@ export function Player({
               })}
             </ol>
             )}
-          </div>
+          </section>
         </div>
       )}
 
+      {/* 2-Section Split Layout for Writing */}
       {phase === 2 && view.writing[index] && (
-        <article style={{ display: 'flex', gap: 12, flexWrap: 'wrap' }}>
-          <div style={{ flex: '1 1 320px' }}>
-            <h2>{view.writing[index].title}</h2>
-            <p>{view.writing[index].prompt}</p>
-            <p>Write at least {view.writing[index].minimum} words.</p>
+        <div
+          className="ielts-split-container"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            width: '100%',
+            overflow: 'hidden',
+          }}
+        >
+          <section
+            aria-label="Writing task instructions"
+            className="ielts-split-left ielts-pane-scroll"
+            style={{
+              height: '100%',
+              overflowY: 'auto',
+              padding: '24px 32px',
+              borderRight: '1px solid #e2e8f0',
+              backgroundColor: '#ffffff',
+              boxSizing: 'border-box',
+            }}
+          >
+            <h2 style={{ marginTop: 0, fontSize: '1.4rem', color: '#0f172a', fontWeight: 800 }}>
+              {view.writing[index].title}
+            </h2>
+            <div
+              style={{
+                backgroundColor: '#eff6ff',
+                border: '1px solid #bfdbfe',
+                borderRadius: '8px',
+                padding: '12px 16px',
+                margin: '16px 0',
+                color: '#1e40af',
+                fontSize: '0.92rem',
+                fontWeight: 600,
+              }}
+            >
+              Write at least {view.writing[index].minimum} words.
+            </div>
+            <p style={{ lineHeight: 1.7, color: '#334155', fontSize: '1rem', whiteSpace: 'pre-line' }}>
+              {view.writing[index].prompt}
+            </p>
             {view.writing[index].visual && (
-              <VisualRenderer visual={view.writing[index].visual} />
+              <div style={{ marginTop: 20 }}>
+                <VisualRenderer visual={view.writing[index].visual} />
+              </div>
             )}
-          </div>
-          <div style={{ flex: '1 1 320px' }}>
-            <label htmlFor="writing-answer">Your response</label>
+          </section>
+
+          <section
+            aria-label="Writing response area"
+            className="ielts-split-right ielts-pane-scroll"
+            style={{
+              height: '100%',
+              overflowY: 'auto',
+              padding: '24px 32px',
+              backgroundColor: '#ffffff',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 10 }}>
+              <label htmlFor="writing-answer" style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a' }}>
+                Your Response:
+              </label>
+              <span
+                aria-live="polite"
+                style={{
+                  fontSize: '13px',
+                  fontWeight: 600,
+                  color:
+                    countWords(data.texts[index] ?? '') >= view.writing[index].minimum
+                      ? '#16a34a'
+                      : '#dc2626',
+                  backgroundColor:
+                    countWords(data.texts[index] ?? '') >= view.writing[index].minimum
+                      ? '#f0fdf4'
+                      : '#fef2f2',
+                  padding: '3px 10px',
+                  borderRadius: '6px',
+                  border:
+                    countWords(data.texts[index] ?? '') >= view.writing[index].minimum
+                      ? '1px solid #bbf7d0'
+                      : '1px solid #fecaca',
+                }}
+              >
+                {countWords(data.texts[index] ?? '')} / {view.writing[index].minimum} words
+              </span>
+            </div>
             <textarea
               id="writing-answer"
-              rows={18}
-              style={{ width: '100%' }}
+              rows={20}
+              placeholder="Type your essay or report here..."
+              style={{
+                width: '100%',
+                flex: 1,
+                minHeight: '340px',
+                padding: '14px 16px',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                fontSize: '1rem',
+                lineHeight: 1.6,
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                resize: 'none',
+                boxSizing: 'border-box',
+                outline: 'none',
+              }}
               value={data.texts[index] ?? ''}
               onChange={(e) => {
                 const texts = [...data.texts];
@@ -1074,60 +1053,134 @@ export function Player({
                 edit({ texts });
               }}
             />
-            <p aria-live="polite">
-              {countWords(data.texts[index] ?? '')} words
-            </p>
-          </div>
-        </article>
-      )}
-
-      {phase === 3 && view.speaking[index] && (
-        <article>
-          <h2>Speaking part {view.speaking[index].part}</h2>
-          <p>{view.speaking[index].prompt}</p>
-          {view.speaking[index].cue?.length ? (
-            <>
-              <p>You should say:</p>
-              <ul>
-                {view.speaking[index].cue?.map((c, i) => <li key={i}>{c}</li>)}
-              </ul>
-            </>
-          ) : null}
-          <ol>
-            {view.speaking[index].questions?.map((q, i) => <li key={i}>{q}</li>)}
-          </ol>
-          <label htmlFor="speaking-notes">Your notes or reflection</label>
-          <textarea
-            id="speaking-notes"
-            rows={6}
-            style={{ width: '100%' }}
-            value={data.speakingTexts[index] ?? ''}
-            onChange={(e) => {
-              const speakingTexts = [...data.speakingTexts];
-              speakingTexts[index] = e.target.value;
-              edit({ speakingTexts });
-            }}
-          />
-        </article>
-      )}
-
+          </section>
         </div>
-      </div>
+      )}
 
-      {/* Floating Fillout Notes on the Right Side (Opposite of Question Navigator) */}
+      {/* 2-Section Split Layout for Speaking */}
+      {phase === 3 && view.speaking[index] && (
+        <div
+          className="ielts-split-container"
+          style={{
+            flex: 1,
+            minHeight: 0,
+            display: 'grid',
+            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
+            width: '100%',
+            overflow: 'hidden',
+          }}
+        >
+          <section
+            aria-label="Speaking prompt"
+            className="ielts-split-left ielts-pane-scroll"
+            style={{
+              height: '100%',
+              overflowY: 'auto',
+              padding: '24px 32px',
+              borderRight: '1px solid #e2e8f0',
+              backgroundColor: '#ffffff',
+              boxSizing: 'border-box',
+            }}
+          >
+            <h2 style={{ marginTop: 0, fontSize: '1.4rem', color: '#0f172a', fontWeight: 800 }}>
+              Speaking Part {view.speaking[index].part}
+            </h2>
+            <p style={{ lineHeight: 1.7, color: '#334155', fontSize: '1rem' }}>
+              {view.speaking[index].prompt}
+            </p>
+            {view.speaking[index].cue?.length ? (
+              <div
+                style={{
+                  backgroundColor: '#f8fafc',
+                  border: '1px solid #e2e8f0',
+                  borderRadius: '8px',
+                  padding: '16px 20px',
+                  margin: '16px 0',
+                }}
+              >
+                <strong style={{ color: '#0f172a', display: 'block', marginBottom: 8 }}>
+                  You should say:
+                </strong>
+                <ul style={{ margin: 0, paddingLeft: 20, color: '#334155', lineHeight: 1.6 }}>
+                  {view.speaking[index].cue?.map((c, i) => (
+                    <li key={i}>{c}</li>
+                  ))}
+                </ul>
+              </div>
+            ) : null}
+            {view.speaking[index].questions?.length ? (
+              <div style={{ marginTop: 16 }}>
+                <strong style={{ color: '#0f172a', display: 'block', marginBottom: 8 }}>
+                  Discussion Questions:
+                </strong>
+                <ol style={{ paddingLeft: 20, color: '#334155', lineHeight: 1.6 }}>
+                  {view.speaking[index].questions?.map((q, i) => (
+                    <li key={i} style={{ marginBottom: 6 }}>{q}</li>
+                  ))}
+                </ol>
+              </div>
+            ) : null}
+          </section>
+
+          <section
+            aria-label="Speaking practice reflection"
+            className="ielts-split-right ielts-pane-scroll"
+            style={{
+              height: '100%',
+              overflowY: 'auto',
+              padding: '24px 32px',
+              backgroundColor: '#ffffff',
+              display: 'flex',
+              flexDirection: 'column',
+              boxSizing: 'border-box',
+            }}
+          >
+            <label htmlFor="speaking-notes" style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', marginBottom: 10 }}>
+              Your Notes or Reflection:
+            </label>
+            <textarea
+              id="speaking-notes"
+              rows={16}
+              placeholder="Draft your key speaking points or reflection..."
+              style={{
+                width: '100%',
+                flex: 1,
+                minHeight: '260px',
+                padding: '14px 16px',
+                borderRadius: '8px',
+                border: '1px solid #cbd5e1',
+                fontSize: '1rem',
+                lineHeight: 1.6,
+                fontFamily: 'system-ui, -apple-system, sans-serif',
+                resize: 'none',
+                boxSizing: 'border-box',
+                outline: 'none',
+              }}
+              value={data.speakingTexts[index] ?? ''}
+              onChange={(e) => {
+                const speakingTexts = [...data.speakingTexts];
+                speakingTexts[index] = e.target.value;
+                edit({ speakingTexts });
+              }}
+            />
+          </section>
+        </div>
+      )}
+
+      {/* Floating Fillout Notes Drawer */}
       {notesOpen && (
         <aside
           aria-label={`Rough notes for ${SECTION_LABELS[phase]}`}
           style={{
             position: 'fixed',
-            top: '76px',
+            top: '72px',
             right: '24px',
-            width: '320px',
-            maxHeight: 'calc(100vh - 100px)',
+            width: '360px',
+            maxHeight: 'calc(100vh - 150px)',
             backgroundColor: '#ffffff',
             border: '1px solid #cbd5e1',
             borderRadius: '12px',
-            boxShadow: '0 10px 25px -5px rgba(15, 23, 42, 0.12), 0 8px 10px -6px rgba(15, 23, 42, 0.08)',
+            boxShadow: '0 12px 30px rgba(15, 23, 42, 0.15)',
             display: 'flex',
             flexDirection: 'column',
             zIndex: 60,
@@ -1136,61 +1189,63 @@ export function Player({
         >
           <div
             style={{
-              padding: '12px 16px',
-              borderBottom: '1px solid #e2e8f0',
               display: 'flex',
               alignItems: 'center',
               justifyContent: 'space-between',
+              padding: '12px 16px',
+              borderBottom: '1px solid #e2e8f0',
               backgroundColor: '#f8fafc',
             }}
           >
-            <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
-              <span aria-hidden="true" style={{ fontSize: '15px' }}>📝</span>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span aria-hidden="true" style={{ fontSize: '16px' }}>📝</span>
               <strong style={{ fontSize: '13px', color: '#0f172a' }}>
-                Scratchpad Notes ({SECTION_LABELS[phase]})
+                Rough Notes · {SECTION_LABELS[phase]}
               </strong>
             </div>
             <button
               type="button"
               onClick={() => setNotesOpen(false)}
-              aria-label="Close notes panel"
+              aria-label="Close notes"
               style={{
-                background: 'transparent',
+                background: 'none',
                 border: 'none',
-                cursor: 'pointer',
-                fontSize: '14px',
                 color: '#64748b',
-                padding: '4px 6px',
+                fontSize: '18px',
+                fontWeight: 700,
+                cursor: 'pointer',
+                lineHeight: 1,
+                padding: '2px 6px',
                 borderRadius: '4px',
               }}
             >
-              ✕
+              ×
             </button>
           </div>
-          <div style={{ padding: '12px 14px', display: 'flex', flexDirection: 'column', flex: 1 }}>
-            <label
-              htmlFor="section-notes"
-              style={{ fontSize: '11px', color: '#64748b', marginBottom: '6px' }}
-            >
-              Draft notes, keywords, spellings, or outlines (auto-saved):
-            </label>
+          <div style={{ padding: '14px 16px', display: 'flex', flexDirection: 'column', flex: 1, minHeight: 0 }}>
+            <p style={{ margin: '0 0 8px', fontSize: '12px', color: '#64748b', lineHeight: 1.4 }}>
+              Private scratchpad for your rough workings. Saved automatically with your attempt.
+            </p>
             <textarea
               id="section-notes"
-              rows={12}
-              placeholder="Type notes here..."
+              aria-label={`Scratchpad notes for ${SECTION_LABELS[phase]}`}
+              rows={10}
+              placeholder="Write your rough notes or draft calculations here..."
               style={{
                 width: '100%',
-                boxSizing: 'border-box',
-                padding: '10px',
-                fontSize: '13px',
-                lineHeight: 1.5,
+                flex: 1,
+                minHeight: '180px',
+                padding: '10px 12px',
                 borderRadius: '6px',
                 border: '1px solid #cbd5e1',
-                resize: 'vertical',
-                fontFamily: 'inherit',
+                fontSize: '13px',
+                fontFamily: 'monospace',
+                lineHeight: 1.5,
+                boxSizing: 'border-box',
+                resize: 'none',
                 outline: 'none',
               }}
-              value={currentNotes}
+              value={data.notes?.[phase] ?? ''}
               onChange={(e) => {
                 const notes = [...(data.notes ?? [])];
                 notes[phase] = e.target.value;
@@ -1213,8 +1268,8 @@ export function Player({
           style={{
             position: 'fixed',
             right: '24px',
-            bottom: '24px',
-            zIndex: 50,
+            bottom: '68px',
+            zIndex: 35,
             backgroundColor: '#0f172a',
             color: '#ffffff',
             border: 'none',
@@ -1222,7 +1277,7 @@ export function Player({
             padding: '8px 16px',
             fontSize: '13px',
             fontWeight: 600,
-            boxShadow: '0 4px 14px rgba(15, 23, 42, 0.2)',
+            boxShadow: '0 4px 14px rgba(15, 23, 42, 0.25)',
             cursor: 'pointer',
             display: 'inline-flex',
             alignItems: 'center',
@@ -1246,10 +1301,34 @@ export function Player({
         </button>
       )}
 
-      <footer style={{ display: 'flex', gap: 8, marginTop: 24, flexWrap: 'wrap', alignItems: 'center' }}>
-        {partCount > 1 && (
-          <>
-            {Array.from({ length: partCount }, (_, i) => (
+      {/* Sticky Bottom Navigation Bar */}
+      <footer
+        role="region"
+        aria-label="Test navigation and question jump"
+        style={{
+          flexShrink: 0,
+          position: 'sticky',
+          bottom: 0,
+          left: 0,
+          right: 0,
+          width: '100%',
+          backgroundColor: '#ffffff',
+          borderTop: '1px solid #cbd5e1',
+          boxShadow: '0 -4px 16px rgba(15, 23, 42, 0.08)',
+          padding: '8px 24px',
+          zIndex: 40,
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'space-between',
+          gap: 16,
+          flexWrap: 'wrap',
+          boxSizing: 'border-box',
+        }}
+      >
+        {/* Left: Part Switchers and Prev/Next */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+          {partCount > 1 &&
+            Array.from({ length: partCount }, (_, i) => (
               <Button
                 key={i}
                 variant={i === index ? 'primary' : 'outline'}
@@ -1261,16 +1340,121 @@ export function Player({
                 {phase === 2 ? 'Task' : phase === 1 ? 'Passage' : 'Part'} {i + 1}
               </Button>
             ))}
-            <Button variant="outline" size="sm" disabled={index === 0} onClick={() => goToPart(index - 1)}>
-              ← Previous
-            </Button>
-            <Button variant="outline" size="sm" disabled={index >= partCount - 1} onClick={() => goToPart(index + 1)}>
-              Next →
-            </Button>
-          </>
+          {partCount > 1 && (
+            <>
+              <Button variant="outline" size="sm" disabled={index === 0} onClick={() => goToPart(index - 1)}>
+                ← Previous
+              </Button>
+              <Button variant="outline" size="sm" disabled={index >= partCount - 1} onClick={() => goToPart(index + 1)}>
+                Next →
+              </Button>
+            </>
+          )}
+        </div>
+
+        {/* Center: Question Jump Buttons (authentic CD-IELTS footer navigation) */}
+        {questions.length > 0 && (
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              gap: 6,
+              overflowX: 'auto',
+              maxWidth: '48vw',
+              padding: '2px 4px',
+            }}
+            aria-label="Question jump buttons"
+          >
+            {questions.map((q, i) => {
+              const num = numberOf(q, offsetOf(index));
+              const isAnswered = answered(q.id);
+              const isMarked = marked.includes(q.id);
+              const isInCurrentGroup = activeGroup && i >= activeGroup.start - 1 && i < activeGroup.end;
+              return (
+                <button
+                  key={q.id}
+                  type="button"
+                  aria-label={`Question ${num}${isMarked ? ', marked' : ''}${isAnswered ? ', answered' : ''}`}
+                  onClick={() => {
+                    const gi = groups.findIndex((g) => i >= g.start - 1 && i < g.end);
+                    if (gi >= 0) setGroup(gi);
+                    if (isMapQuestion) {
+                      setSelectedMapQuestionId(q.id);
+                    } else {
+                      document.getElementById(`q-${q.id}`)?.scrollIntoView({ behavior: 'smooth', block: 'center' });
+                    }
+                  }}
+                  style={{
+                    minWidth: '28px',
+                    height: '30px',
+                    padding: '0 6px',
+                    borderRadius: '6px',
+                    fontSize: '12px',
+                    fontWeight: isAnswered ? 700 : 500,
+                    backgroundColor: isAnswered ? '#eff6ff' : '#ffffff',
+                    color: isAnswered ? '#1d4ed8' : '#334155',
+                    border: isMarked
+                      ? '2px solid #f59e0b'
+                      : isInCurrentGroup
+                        ? '2px solid #0f172a'
+                        : isAnswered
+                          ? '1px solid #93c5fd'
+                          : '1px solid #cbd5e1',
+                    cursor: 'pointer',
+                    position: 'relative',
+                    display: 'inline-flex',
+                    alignItems: 'center',
+                    justifyContent: 'center',
+                    flexShrink: 0,
+                    transition: 'all 0.15s ease',
+                  }}
+                  title={`Question ${num}: ${isAnswered ? 'Answered' : 'Unanswered'}${isMarked ? ' (Marked for review)' : ''}`}
+                >
+                  {num}
+                  {isMarked && (
+                    <span
+                      style={{
+                        position: 'absolute',
+                        top: '-3px',
+                        right: '-3px',
+                        width: '6px',
+                        height: '6px',
+                        borderRadius: '50%',
+                        backgroundColor: '#f59e0b',
+                      }}
+                    />
+                  )}
+                </button>
+              );
+            })}
+          </div>
         )}
 
+        {/* Right: Progress & Continue/Finish Buttons */}
         <div style={{ marginLeft: 'auto', display: 'flex', gap: 10, alignItems: 'center' }}>
+          {questions.length > 0 && (
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              <span style={{ fontSize: '12px', color: '#475569', fontWeight: 600 }}>
+                {answeredCount}/{totalQuestions} Answered
+              </span>
+              {markedCount > 0 && (
+                <span
+                  style={{
+                    fontSize: '11px',
+                    fontWeight: 700,
+                    color: '#b45309',
+                    backgroundColor: '#fef3c7',
+                    border: '1px solid #fde68a',
+                    borderRadius: '4px',
+                    padding: '2px 6px',
+                  }}
+                  title={`${markedCount} question${markedCount > 1 ? 's' : ''} marked for review`}
+                >
+                  ⚑ {markedCount} Marked
+                </span>
+              )}
+            </div>
+          )}
           {index >= partCount - 1 && nextSection && (
             <Button
               variant="primary"

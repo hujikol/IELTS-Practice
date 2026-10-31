@@ -3,6 +3,7 @@ import assert from 'node:assert/strict';
 import { generateFinalReport, buildAttemptCapture } from '../src/lib/assessment-coordinator.ts';
 import { emptyTest } from '../src/lib/material.ts';
 import { sanitizeAttemptRecord, isWritingAttempted, isSpeakingAttempted, type AttemptRecord } from '../src/lib/attempts.ts';
+import type { Aggregates, FinalReport } from '../src/lib/scoring.ts';
 
 test('assessment-coordinator: unattempted writing and speaking yields null bands', async () => {
   const data = emptyTest('full', 0, 'balanced', { provider: 'manual', model: 'mock', createdAt: Date.now() });
@@ -77,13 +78,13 @@ test('sanitizeAttemptRecord: clears fabricated writing and speaking scores from 
       writing: { band: 4.0, task1: 4.0, task2: 4.0, confidence: 'high', status: 'assessed' },
       speaking: { band: 6.5, confidence: 'high', status: 'assessed' },
     },
-    aggregates: {} as any,
+    aggregates: {} as unknown as Aggregates,
     weakness_profile: { summary: '', weaknesses: [], strengths: [], seven_day_plan: [] },
     review: {
       listening: [],
       reading: [],
-      writing: { tasks: [{ task: 1, band: 4.0 } as any] },
-      speaking: { parts: [{ part: 1, transcript: '' } as any] },
+      writing: { tasks: [{ task: 1, band: 4.0 } as unknown as FinalReport['review']['writing']['tasks'][number]] },
+      speaking: { parts: [{ part: 1, transcript: '' } as unknown as FinalReport['review']['speaking']['parts'][number]] },
     },
   };
 
