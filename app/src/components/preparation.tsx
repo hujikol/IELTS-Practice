@@ -21,6 +21,7 @@ import { applyMaterial } from '../lib/material.ts';
 import { CONVERSATIONAL_LISTENING_BLOCK } from '../lib/sample-material.ts';
 import { pregenerateListeningAudio } from '../lib/audio-manager.ts';
 import { randomizeVoiceMap } from '../lib/voices.ts';
+import { HardwareSpecsModal } from './hardware-specs-modal.tsx';
 import { Button } from './ui/button.tsx';
 import type { ErrorCode, PrepJob, Scope, TestData } from '../lib/types.ts';
 
@@ -135,6 +136,7 @@ export function Preparation({
   const [activePipelineJobKey, setActivePipelineJobKey] = useState<string | null>(null);
   const [pipelineStepMessage, setPipelineStepMessage] = useState<string>('');
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showHwSpecsModal, setShowHwSpecsModal] = useState(false);
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>(loadProviderConfig);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
@@ -381,28 +383,6 @@ export function Preparation({
 
           currentRecord = updated;
           setRecord(updated);
-
-          // If a listening job was prepared, pre-render the voices now so the player has 0ms latency
-          if (currentJob.section === 'listening') {
-            const listeningBlock = currentRecord.data.listening[currentJob.part - 1] || currentRecord.data.listening[0];
-            const script = listeningBlock?.script;
-            if (Array.isArray(script) && script.length > 0) {
-              const vMap = currentRecord.voice_map || randomizeVoiceMap();
-              if (!currentRecord.voice_map) {
-                currentRecord.voice_map = vMap;
-                writeRecord(currentRecord);
-              }
-              setPipelineStepMessage(`Synthesizing FP32 neural audio for ${currentJob.label} (0/${script.length})...`);
-              try {
-                await pregenerateListeningAudio(script, currentJob.part, vMap, (done, total) => {
-                  setPipelineStepMessage(`Synthesizing FP32 neural audio for ${currentJob.label} (${done}/${total})...`);
-                });
-              } catch (audioErr) {
-                console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
-              }
-            }
-          }
-
           await refresh();
         } catch (jobErr) {
           console.group(`❌ [IELTS Studio] Batch Generation Error on Step ${i + 1}/${jobs.length}: ${currentJob.label} (${currentJob.key})`);
@@ -423,7 +403,43 @@ export function Preparation({
         }
       }
 
-      setNotice('✓ All test materials generated and saved successfully to browser storage!');
+      // ─── FINAL ACTION: Local Neural Voice Generation ───
+      // Complete all question sets from LLM calls first, then synthesize audio locally on-device
+      const listeningBlocks = currentRecord.data.listening || [];
+      const hasListeningScript = listeningBlocks.some(
+        (b) => Array.isArray(b?.script) && b.script.length > 0,
+      );
+
+      if (hasListeningScript) {
+        setActivePipelineJobKey('local-voice-synthesis');
+        const vMap = currentRecord.voice_map || randomizeVoiceMap();
+        if (!currentRecord.voice_map) {
+          currentRecord.voice_map = vMap;
+          writeRecord(currentRecord);
+        }
+
+        for (let bIdx = 0; bIdx < listeningBlocks.length; bIdx++) {
+          const block = listeningBlocks[bIdx];
+          const script = block?.script;
+          const partNum = bIdx + 1;
+          if (Array.isArray(script) && script.length > 0) {
+            setPipelineStepMessage(
+              `[Final Stage] Synthesizing local FP32 audio for Listening Part ${partNum} (0/${script.length})...`,
+            );
+            try {
+              await pregenerateListeningAudio(script, partNum, vMap, (done, total) => {
+                setPipelineStepMessage(
+                  `[Final Stage] Synthesizing local FP32 audio for Listening Part ${partNum} (${done}/${total})...`,
+                );
+              });
+            } catch (audioErr) {
+              console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
+            }
+          }
+        }
+      }
+
+      setNotice('✓ All test questions generated from AI and local neural voices rendered successfully!');
     } catch (err) {
       console.error('[IELTS Studio] Batch Generation Pipeline Stopped:', {
         error: (err as Error).message,
@@ -770,7 +786,28 @@ export function Preparation({
             Back to Dashboard
           </Button>
         )}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px', flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setShowHwSpecsModal(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '9999px',
+              border: '1px solid #cbd5e1',
+              backgroundColor: '#f8fafc',
+              color: '#334155',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            title="View minimum and recommended device specifications for local neural TTS"
+          >
+            ⚡ Device Specs (Kokoro FP32)
+          </button>
           <AiConnectionStatusPill onClick={() => setShowAiModal(true)} config={providerConfig} />
           {isComplete && (
             <Button variant="success" size="sm" icon="🚀" onClick={handleStartPracticeNow}>
@@ -894,6 +931,47 @@ export function Preparation({
                 transition: 'width 0.4s ease-in-out',
               }}
             />
+          </div>
+
+          {/* Audio Execution Sequence & Device Specs Callout */}
+          <div
+            style={{
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'space-between',
+              flexWrap: 'wrap',
+              gap: '10px',
+              marginTop: '16px',
+              padding: '10px 14px',
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '8px',
+              fontSize: '12.5px',
+              color: '#475569',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+              <span aria-hidden="true" style={{ fontSize: '15px' }}>🎙️</span>
+              <span>
+                <strong>Audio Execution Pipeline:</strong> All question sets are generated from AI first. Voice synthesis executes locally on your device as the final action.
+              </span>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowHwSpecsModal(true)}
+              style={{
+                background: 'none',
+                border: 'none',
+                color: '#2563eb',
+                fontWeight: 600,
+                fontSize: '12px',
+                cursor: 'pointer',
+                padding: 0,
+                textDecoration: 'underline',
+              }}
+            >
+              View Minimum Device Specs →
+            </button>
           </div>
         </div>
 
@@ -1493,6 +1571,12 @@ export function Preparation({
         isOpen={showAiModal}
         onClose={() => setShowAiModal(false)}
         onConfigChanged={setProviderConfig}
+      />
+
+      {/* Hardware Specifications Modal */}
+      <HardwareSpecsModal
+        isOpen={showHwSpecsModal}
+        onClose={() => setShowHwSpecsModal(false)}
       />
 
       <style>{`

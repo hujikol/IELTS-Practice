@@ -1,6 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ScriptLine } from '../lib/types.ts';
 import { Button } from './ui/button.tsx';
+import { HardwareSpecsModal } from './hardware-specs-modal.tsx';
 import {
   isAudioModelCached,
   downloadAudioModelOnce,
@@ -43,6 +44,7 @@ export function ListeningAudioPlayer({
   const [modelCached, setModelCached] = useState(false);
   const [downloadProgress, setDownloadProgress] = useState<AudioProgressEvent | null>(null);
   const [showInfoPopover, setShowInfoPopover] = useState(false);
+  const [showHwSpecsModal, setShowHwSpecsModal] = useState(false);
   const [hasPlayedInTimedMode, setHasPlayedInTimedMode] = useState(false);
   const [activeVoiceMap, setActiveVoiceMap] = useState<Record<string, VoiceMapEntry>>(() => voiceMap || randomizeVoiceMap());
   const [currentSpeakerInfo, setCurrentSpeakerInfo] = useState<{ label: string; voiceName: string } | null>(null);
@@ -709,6 +711,28 @@ export function ListeningAudioPlayer({
                   • Timed Mock Condition: In genuine Cambridge testing, the recording is heard once only.
                 </div>
               )}
+              <div style={{ marginTop: '8px', paddingTop: '6px', borderTop: '1px solid #e2e8f0' }}>
+                <button
+                  type="button"
+                  onClick={() => setShowHwSpecsModal(true)}
+                  style={{
+                    background: 'none',
+                    border: 'none',
+                    color: '#2563eb',
+                    fontWeight: 600,
+                    fontSize: '11px',
+                    cursor: 'pointer',
+                    padding: 0,
+                    textDecoration: 'underline',
+                    display: 'flex',
+                    alignItems: 'center',
+                    gap: '4px',
+                  }}
+                >
+                  <span>⚡</span>
+                  <span>Minimum Device Specifications →</span>
+                </button>
+              </div>
             </div>
           )}
         </div>
@@ -775,6 +799,12 @@ export function ListeningAudioPlayer({
           </button>
         </div>
       )}
+
+      {/* Hardware Specifications Modal */}
+      <HardwareSpecsModal
+        isOpen={showHwSpecsModal}
+        onClose={() => setShowHwSpecsModal(false)}
+      />
     </div>
   );
 }
