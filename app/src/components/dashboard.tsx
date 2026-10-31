@@ -6,6 +6,7 @@ import {
   type AttemptSummary,
   type AttemptRecord,
 } from '../lib/attempts.ts';
+import { createConversationalListeningAttempt } from '../lib/sample-material.ts';
 import { emptyTest } from '../lib/material.ts';
 import { loadProviderConfig, type ProviderConfig } from '../lib/providers.ts';
 import { ieltsBandToCefr } from '../lib/bands.ts';
@@ -85,6 +86,18 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
       onStartPreparation(created);
     } catch (e) {
       setError((e as Error).message || 'Failed to create new practice test.');
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const handleLaunchConversationalListening = async () => {
+    setBusy(true);
+    try {
+      const att = await createConversationalListeningAttempt(selectedMode);
+      onOpenAttempt(att.id);
+    } catch (e) {
+      setError((e as Error).message || 'Failed to start conversational listening practice.');
     } finally {
       setBusy(false);
     }
@@ -329,15 +342,24 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
             </div>
           </div>
 
-          {/* Action Button */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end' }}>
+          {/* Action Buttons */}
+          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
+            <Button
+              variant="outline"
+              size="lg"
+              loading={busy}
+              onClick={handleLaunchConversationalListening}
+              title="Practice official 2-way dialogue with Kokoro FP32 neural speech synthesis"
+            >
+              🎧 Practice 2-Way Conversational Listening →
+            </Button>
             <Button
               variant="primary"
               size="lg"
               loading={busy}
               onClick={handleCreateTest}
             >
-              Configure & Generate Test →
+              Configure &amp; Generate Test →
             </Button>
           </div>
         </section>

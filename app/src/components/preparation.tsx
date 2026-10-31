@@ -16,6 +16,8 @@ import { renderGuide, renderRepair, type RepairError } from '../lib/guide.ts';
 import { ActionCounter, stageImport, type ImportFailure, type StagedCandidate } from '../lib/import-pipeline.ts';
 import { callProviderChat, loadProviderConfig, type ProviderConfig } from '../lib/providers.ts';
 import { AiConnectionModal, AiConnectionStatusPill } from './ai-connection.tsx';
+import { applyMaterial } from '../lib/material.ts';
+import { CONVERSATIONAL_LISTENING_BLOCK } from '../lib/sample-material.ts';
 import { Button } from './ui/button.tsx';
 import type { ErrorCode, PrepJob, Scope, TestData } from '../lib/types.ts';
 
@@ -243,6 +245,40 @@ export function Preparation({
       setPasted('');
       await refresh();
     });
+
+  const handleLoadConversationalListening = async () => {
+    if (!record || !test) return;
+    setBusy('load_conversational');
+    setError(null);
+    try {
+      const listeningJob =
+        jobs.find((j) => j.section === 'listening' && j.part === 1) ||
+        jobs.find((j) => j.section === 'listening') ||
+        jobs[0];
+      if (!listeningJob) return;
+
+      const nextTestData = applyMaterial(record.data, listeningJob, CONVERSATIONAL_LISTENING_BLOCK);
+      const updated = await commitImport({
+        attempt_id: record.id,
+        expected_revision: record.revision,
+        job_key: listeningJob.key,
+        generation_id: 'sample-conversational-gen',
+        data: nextTestData,
+        sha256: 'built-in-conversational-sha256',
+        contract_version: 1,
+        raw_original: JSON.stringify(CONVERSATIONAL_LISTENING_BLOCK),
+        replace_confirmed: true,
+      });
+
+      setRecord(updated);
+      setNotice('✓ 2-Way Conversational Listening section loaded with verified FP32 dialogue!');
+      await refresh();
+    } catch (e) {
+      setError((e as Error).message || 'Failed to load conversational listening section.');
+    } finally {
+      setBusy(null);
+    }
+  };
 
   // ─── Automated Multi-Step Pipeline: One Button to Generate All ───
 
@@ -722,6 +758,18 @@ export function Preparation({
                   ? '↺ Regenerate All Materials'
                   : '⚡ Generate Complete Test (1-Click)'}
             </Button>
+
+            {jobs.some((j) => j.section === 'listening' && !record.data.prepared?.includes(j.key)) && (
+              <Button
+                variant="outline"
+                size="lg"
+                disabled={isGeneratingAll || busy !== null}
+                onClick={handleLoadConversationalListening}
+                title="Instantly load authentic 2-way conversation dialogue with 10 questions"
+              >
+                🎧 Load 2-Way Conversational Listening
+              </Button>
+            )}
 
             {isComplete && (
               <Button variant="success" size="lg" onClick={handleStartPracticeNow}>

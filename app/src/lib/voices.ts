@@ -58,7 +58,7 @@ export const NARRATOR_VOICE = 'bf_emma';
 
 export const voiceInfo = (id: string): VoiceInfo | undefined => byId.get(id);
 
-// A dialogue set needs one woman and one man. Only British satisfies that today.
+// A dialogue set needs one woman and one man.
 export type DialogueSet = { id: string; woman: string; man: string };
 
 export const DIALOGUE_SETS: readonly DialogueSet[] = [
@@ -70,6 +70,68 @@ export const DIALOGUE_SETS: readonly DialogueSet[] = [
 
 export const MONOLOGUE_VOICES = ['bm_george', 'am_adam', 'bm_lewis', 'am_fenrir'] as const;
 
+/** Extended roster of high-quality Kokoro voices for randomized speaker generation */
+export const RANDOM_FEMALE_VOICES = [
+  { id: 'af_heart', name: 'Heart', accent: 'American' as Accent },
+  { id: 'af_bella', name: 'Bella', accent: 'American' as Accent },
+  { id: 'af_nicole', name: 'Nicole', accent: 'American' as Accent },
+  { id: 'bf_emma', name: 'Emma', accent: 'British' as Accent },
+  { id: 'bf_alice', name: 'Alice', accent: 'British' as Accent },
+  { id: 'bf_isabella', name: 'Isabella', accent: 'British' as Accent },
+  { id: 'bf_lily', name: 'Lily', accent: 'British' as Accent },
+] as const;
+
+export const RANDOM_MALE_VOICES = [
+  { id: 'bm_george', name: 'George', accent: 'British' as Accent },
+  { id: 'bm_daniel', name: 'Daniel', accent: 'British' as Accent },
+  { id: 'bm_lewis', name: 'Lewis', accent: 'British' as Accent },
+  { id: 'bm_fable', name: 'Fable', accent: 'British' as Accent },
+  { id: 'am_michael', name: 'Michael', accent: 'American' as Accent },
+  { id: 'am_adam', name: 'Adam', accent: 'American' as Accent },
+  { id: 'am_fenrir', name: 'Fenrir', accent: 'American' as Accent },
+  { id: 'am_eric', name: 'Eric', accent: 'American' as Accent },
+] as const;
+
+export type VoiceMapEntry = {
+  set_id: string;
+  kind: 'dialogue' | 'monologue';
+  woman?: string;
+  man?: string;
+};
+
+/**
+ * Randomize speaker voices across all listening parts, guaranteeing distinct
+ * female and male voice pairs for conversations and varied accents.
+ */
+export function randomizeVoiceMap(): Record<string, VoiceMapEntry> {
+  const shuffledFemales = [...RANDOM_FEMALE_VOICES].sort(() => Math.random() - 0.5);
+  const shuffledMales = [...RANDOM_MALE_VOICES].sort(() => Math.random() - 0.5);
+
+  const p1Woman = shuffledFemales[0]!.id;
+  const p1Man = shuffledMales[0]!.id;
+
+  const p3Woman = shuffledFemales[1]!.id;
+  const p3Man = shuffledMales[1]!.id;
+
+  const p2Voice = Math.random() > 0.5 ? shuffledMales[2]!.id : shuffledFemales[2]!.id;
+  const p4Voice = Math.random() > 0.5 ? shuffledMales[3]!.id : shuffledFemales[3]!.id;
+
+  return {
+    '1': { set_id: `custom-${p1Woman}-${p1Man}`, kind: 'dialogue', woman: p1Woman, man: p1Man },
+    '2': { set_id: p2Voice, kind: 'monologue' },
+    '3': { set_id: `custom-${p3Woman}-${p3Man}`, kind: 'dialogue', woman: p3Woman, man: p3Man },
+    '4': { set_id: p4Voice, kind: 'monologue' },
+  };
+}
+
+/** Get human-friendly label for a voice ID */
+export function voiceDisplayName(voiceId: string): string {
+  const all = [...VOICES, ...RANDOM_FEMALE_VOICES, ...RANDOM_MALE_VOICES];
+  const found = all.find((v) => v.id === voiceId);
+  if (!found) return voiceId;
+  return `${found.name} (${found.accent === 'British' ? 'UK' : 'US'})`;
+}
+
 /**
  * Resolve the voice assignment for one attempt. Deterministic from the seed so a
  * retry renders identically and a reported audio bug is reproducible.
@@ -78,7 +140,7 @@ export const MONOLOGUE_VOICES = ['bm_george', 'am_adam', 'bm_lewis', 'am_fenrir'
  * needing exactly one speaker. P1 and P3 must differ, otherwise a learner hears the
  * same pair twice and learns nothing about speaker change.
  */
-export function resolveVoiceMap(seed: number): Record<string, { set_id: string; kind: 'dialogue' | 'monologue' }> {
+export function resolveVoiceMap(seed: number): Record<string, VoiceMapEntry> {
   const dialogue = DIALOGUE_SETS;
   const first = dialogue[seed % dialogue.length]!;
   // Offset guarantees a different set for P3 even when the modulus is small.
@@ -93,7 +155,7 @@ export function resolveVoiceMap(seed: number): Record<string, { set_id: string; 
 
 /** Resolve the actual voice id for a speaker in a part. */
 export function voiceForPart(
-  map: Record<string, { set_id: string; kind: 'dialogue' | 'monologue' }>,
+  map: Record<string, VoiceMapEntry>,
   part: number,
   speaker: 'woman' | 'man' | 'narrator',
 ): string {
@@ -101,6 +163,8 @@ export function voiceForPart(
   const entry = map[String(part)];
   if (!entry) return NARRATOR_VOICE;
   if (entry.kind === 'monologue') return entry.set_id;
+  if (entry.woman && speaker === 'woman') return entry.woman;
+  if (entry.man && speaker === 'man') return entry.man;
   const set = DIALOGUE_SETS.find((d) => d.id === entry.set_id);
   if (!set) return NARRATOR_VOICE;
   return speaker === 'woman' ? set.woman : set.man;

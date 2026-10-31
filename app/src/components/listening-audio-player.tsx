@@ -5,8 +5,15 @@ import {
   isAudioModelCached,
   downloadAudioModelOnce,
   subscribeAudioProgress,
+  synthesizeSpeechAudio,
   type AudioProgressEvent,
 } from '../lib/audio-manager.ts';
+import {
+  randomizeVoiceMap,
+  voiceDisplayName,
+  voiceForPart,
+  type VoiceMapEntry,
+} from '../lib/voices.ts';
 
 interface ListeningAudioPlayerProps {
   partNumber: number;
@@ -34,9 +41,12 @@ export function ListeningAudioPlayer({
   const [downloadProgress, setDownloadProgress] = useState<AudioProgressEvent | null>(null);
   const [showInfoPopover, setShowInfoPopover] = useState(false);
   const [hasPlayedInTimedMode, setHasPlayedInTimedMode] = useState(false);
+  const [activeVoiceMap, setActiveVoiceMap] = useState<Record<string, VoiceMapEntry>>(() => randomizeVoiceMap());
+  const [currentSpeakerInfo, setCurrentSpeakerInfo] = useState<{ label: string; voiceName: string } | null>(null);
 
   const synthRef = useRef<SpeechSynthesis | null>(null);
   const utteranceRef = useRef<SpeechSynthesisUtterance | null>(null);
+  const audioElRef = useRef<HTMLAudioElement | null>(null);
   const timerRef = useRef<number | null>(null);
   const isPausedRef = useRef<boolean>(false);
   const stageRef = useRef<'idle' | 'countdown_intro' | 'playing_script' | 'countdown_review' | 'finished'>('idle');
@@ -65,6 +75,10 @@ export function ListeningAudioPlayer({
       isPausedRef.current = true;
       if (timerRef.current) clearInterval(timerRef.current);
       if (synthRef.current) synthRef.current.cancel();
+      if (audioElRef.current) {
+        audioElRef.current.pause();
+        audioElRef.current = null;
+      }
     };
   }, []);
 
@@ -75,7 +89,12 @@ export function ListeningAudioPlayer({
     }
   };
 
-  const playSpeechLine = useCallback(
+  const handleRandomizeVoices = () => {
+    const fresh = randomizeVoiceMap();
+    setActiveVoiceMap(fresh);
+  };
+
+  const fallbackSpeechSynthesis = useCallback(
     (text: string, voiceType: 'narrator' | 'woman' | 'man', onEnd?: () => void) => {
       if (isPausedRef.current) return;
 
@@ -111,7 +130,6 @@ export function ListeningAudioPlayer({
       };
 
       utt.onerror = (e) => {
-        // When user pauses, speech synthesis cancel triggers error event 'canceled'
         if (!isPausedRef.current && (e as SpeechSynthesisErrorEvent).error !== 'canceled') {
           onEnd?.();
         }
@@ -121,6 +139,61 @@ export function ListeningAudioPlayer({
       synthRef.current.speak(utt);
     },
     [speechRate],
+  );
+
+  const playSpeechLine = useCallback(
+    (text: string, voiceType: 'narrator' | 'woman' | 'man', onEnd?: () => void) => {
+      if (isPausedRef.current) return;
+
+      const voiceId = voiceForPart(activeVoiceMap, partNumber, voiceType);
+      const speakerName = voiceDisplayName(voiceId);
+      setCurrentSpeakerInfo({
+        label: voiceType === 'narrator' ? 'Narrator' : voiceType === 'woman' ? 'Speaker 1 (Woman)' : 'Speaker 2 (Man)',
+        voiceName: speakerName,
+      });
+
+      // Attempt Kokoro FP32 high quality speech synthesis first
+      synthesizeSpeechAudio(text, voiceId, speechRate)
+        .then((blob) => {
+          if (isPausedRef.current) return;
+          if (!blob || blob.size === 0) {
+            fallbackSpeechSynthesis(text, voiceType, onEnd);
+            return;
+          }
+
+          if (audioElRef.current) {
+            audioElRef.current.pause();
+            audioElRef.current = null;
+          }
+
+          const url = URL.createObjectURL(blob);
+          const audio = new Audio(url);
+          audio.playbackRate = speechRate;
+          audioElRef.current = audio;
+
+          audio.onended = () => {
+            URL.revokeObjectURL(url);
+            audioElRef.current = null;
+            if (!isPausedRef.current) onEnd?.();
+          };
+
+          audio.onerror = () => {
+            URL.revokeObjectURL(url);
+            audioElRef.current = null;
+            fallbackSpeechSynthesis(text, voiceType, onEnd);
+          };
+
+          audio.play().catch(() => {
+            URL.revokeObjectURL(url);
+            audioElRef.current = null;
+            fallbackSpeechSynthesis(text, voiceType, onEnd);
+          });
+        })
+        .catch(() => {
+          fallbackSpeechSynthesis(text, voiceType, onEnd);
+        });
+    },
+    [activeVoiceMap, partNumber, speechRate, fallbackSpeechSynthesis],
   );
 
   const playBeep = useCallback((onEnd?: () => void) => {
@@ -290,6 +363,10 @@ export function ListeningAudioPlayer({
       // Pause
       isPausedRef.current = true;
       clearTimer();
+      if (audioElRef.current) {
+        audioElRef.current.pause();
+        audioElRef.current = null;
+      }
       if (synthRef.current) synthRef.current.cancel();
       setIsPlaying(false);
       onPlayStateChange?.(false);
@@ -351,6 +428,10 @@ export function ListeningAudioPlayer({
 
   const handleSkipCountdown = () => {
     clearTimer();
+    if (audioElRef.current) {
+      audioElRef.current.pause();
+      audioElRef.current = null;
+    }
     if (synthRef.current) synthRef.current.cancel();
     setStage('playing_script');
     stageRef.current = 'playing_script';
@@ -368,6 +449,9 @@ export function ListeningAudioPlayer({
     }
   };
 
+  const currentWomanVoice = voiceDisplayName(voiceForPart(activeVoiceMap, partNumber, 'woman'));
+  const currentManVoice = voiceDisplayName(voiceForPart(activeVoiceMap, partNumber, 'man'));
+
   return (
     <div
       style={{
@@ -381,7 +465,7 @@ export function ListeningAudioPlayer({
     >
       <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', gap: '12px' }}>
         {/* Play / Pause / Replay Primary Action */}
-        <div style={{ display: 'flex', alignItems: 'center', gap: '12px' }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '12px', flexWrap: 'wrap' }}>
           <Button
             variant={isPlaying ? 'secondary' : timed && hasPlayedInTimedMode && stage === 'finished' ? 'ghost' : 'primary'}
             size="md"
@@ -403,6 +487,42 @@ export function ListeningAudioPlayer({
                   ? '↺ Replay Audio'
                   : '▶ Start Listening Track'}
           </Button>
+
+          {/* Voices Pill with Randomize Action */}
+          <div
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              backgroundColor: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: '6px',
+              padding: '4px 8px',
+              fontSize: '11px',
+              color: '#334155',
+            }}
+          >
+            <span style={{ fontWeight: 600, color: '#0f172a' }}>🎙️ Voices:</span>
+            <span>👩 {currentWomanVoice} · 👨 {currentManVoice}</span>
+            <button
+              type="button"
+              onClick={handleRandomizeVoices}
+              style={{
+                marginLeft: '4px',
+                background: '#ffffff',
+                border: '1px solid #cbd5e1',
+                borderRadius: '4px',
+                padding: '2px 6px',
+                fontSize: '10px',
+                fontWeight: 700,
+                color: '#2563eb',
+                cursor: 'pointer',
+              }}
+              title="Randomize speakers for natural accent variation"
+            >
+              🔀 Randomize
+            </button>
+          </div>
 
           {/* Speed Presets (Only in untimed practice mode) */}
           {!timed && (
@@ -537,18 +657,18 @@ export function ListeningAudioPlayer({
                 Audio System Information
               </div>
               <div>
-                • Engine: Speech Synthesis with Cambridge multi-voice casting (narrator, woman, man).
+                • Model: Kokoro-82M (FP32 Full-Precision) via ONNX WebAssembly.
               </div>
               <div style={{ marginTop: '4px' }}>
-                • Neural Kokoro Model: {modelCached ? '✓ Cached offline in browser DB.' : 'Online / Fallback.'}
+                • Neural TTS Cache: {modelCached ? '✓ Cached offline in browser storage.' : 'Ready on-demand / Web Speech fallback.'}
               </div>
               {!modelCached && (
                 <div style={{ marginTop: '8px' }}>
                   {downloadProgress?.status === 'downloading' ? (
-                    <div>Downloading Neural TTS: {downloadProgress.progress}%</div>
+                    <div>Downloading Neural TTS (FP32): {downloadProgress.progress}%</div>
                   ) : (
                     <Button variant="outline" size="sm" onClick={handleDownloadModel}>
-                      Pre-cache Neural TTS (~82MB)
+                      Pre-cache Neural TTS FP32
                     </Button>
                   )}
                 </div>
@@ -562,6 +682,32 @@ export function ListeningAudioPlayer({
           )}
         </div>
       </div>
+
+      {/* Live Dialogue Speaker Pill */}
+      {isPlaying && currentSpeakerInfo && stage === 'playing_script' && (
+        <div
+          style={{
+            marginTop: '10px',
+            padding: '6px 12px',
+            backgroundColor: '#f0fdf4',
+            borderRadius: '6px',
+            border: '1px solid #bbf7d0',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            fontSize: '11px',
+            color: '#166534',
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+            <span style={{ width: '8px', height: '8px', borderRadius: '50%', backgroundColor: '#22c55e', display: 'inline-block' }} />
+            <strong>Speaking:</strong> {currentSpeakerInfo.label} · Voice: <strong>{currentSpeakerInfo.voiceName}</strong>
+          </div>
+          <span style={{ fontSize: '10px', color: '#15803d', fontWeight: 600 }}>
+            {modelCached ? '✨ Kokoro FP32 High-Quality Audio' : 'Speech Engine Active'}
+          </span>
+        </div>
+      )}
 
       {/* Intro Preparation Countdown Banner (Minimal, quiet, and easily skippable) */}
       {stage === 'countdown_intro' && isPlaying && (

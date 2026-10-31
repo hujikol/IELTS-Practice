@@ -379,10 +379,70 @@ export function Player({
   const markedCount = useMemo(() => questions.filter((q) => marked.includes(q.id)).length, [questions, marked]);
 
   return (
-    <main style={{ fontFamily: 'system-ui', padding: '16px 20px', maxWidth: 1260, margin: '0 auto', position: 'relative' }}>
-      <header style={{ display: 'flex', justifyContent: 'space-between', gap: 16, flexWrap: 'wrap' }}>
+    <main
+      style={{
+        fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
+        width: '100%',
+        height: '100vh',
+        maxWidth: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        overflow: 'hidden',
+        backgroundColor: '#ffffff',
+        position: 'relative',
+      }}
+    >
+      <style>{`
+        .ielts-pane-scroll {
+          scrollbar-width: thin;
+          scrollbar-color: #cbd5e1 #f8fafc;
+        }
+        .ielts-pane-scroll::-webkit-scrollbar {
+          width: 6px;
+          height: 6px;
+        }
+        .ielts-pane-scroll::-webkit-scrollbar-track {
+          background: #f8fafc;
+        }
+        .ielts-pane-scroll::-webkit-scrollbar-thumb {
+          background: #cbd5e1;
+          border-radius: 4px;
+        }
+        .ielts-pane-scroll::-webkit-scrollbar-thumb:hover {
+          background: #94a3b8;
+        }
+        @media (max-width: 860px) {
+          .ielts-split-container {
+            grid-template-columns: 1fr !important;
+            overflow-y: auto !important;
+          }
+          .ielts-split-left {
+            border-right: none !important;
+            border-bottom: 2px solid #e2e8f0 !important;
+            height: auto !important;
+          }
+          .ielts-split-right {
+            height: auto !important;
+          }
+        }
+      `}</style>
+
+      <header
+        style={{
+          display: 'flex',
+          justifyContent: 'space-between',
+          alignItems: 'center',
+          gap: 16,
+          padding: '10px 24px',
+          borderBottom: '1px solid #e2e8f0',
+          backgroundColor: '#ffffff',
+          flexShrink: 0,
+          zIndex: 20,
+          flexWrap: 'wrap',
+        }}
+      >
         <div>
-          <strong>{SECTION_LABELS[phase] ?? 'Practice'}</strong>
+          <strong style={{ fontSize: '1rem', color: '#0f172a' }}>{SECTION_LABELS[phase] ?? 'Practice'}</strong>
           <div style={{ fontSize: 13, color: '#475569' }}>
             {view.scope === 'full' ? 'Academic mock test' : 'Focused practice'} ·{' '}
             {partCount > 1 ? `Part ${index + 1} of ${partCount}` : 'Single part'}
@@ -442,13 +502,11 @@ export function Player({
           style={{
             display: 'flex',
             gap: 8,
-            marginTop: 14,
-            marginBottom: 6,
-            padding: '6px 8px',
+            padding: '6px 24px',
             backgroundColor: '#f8fafc',
-            border: '1px solid #e2e8f0',
-            borderRadius: 10,
+            borderBottom: '1px solid #e2e8f0',
             overflowX: 'auto',
+            flexShrink: 0,
           }}
         >
           {availableSections.map((sec, idx) => {
@@ -494,14 +552,14 @@ export function Player({
       )}
 
       {notice && (
-        <p role="status" style={{ background: '#eff6ff', padding: 8 }}>
+        <div role="status" style={{ background: '#eff6ff', padding: '8px 24px', flexShrink: 0, fontSize: 13 }}>
           {notice}
-        </p>
+        </div>
       )}
       {error && (
-        <p role="alert" style={{ background: '#fef2f2', padding: 8 }}>
+        <div role="alert" style={{ background: '#fef2f2', padding: '8px 24px', flexShrink: 0, color: '#dc2626', fontSize: 13 }}>
           {error}
-        </p>
+        </div>
       )}
 
       <div
