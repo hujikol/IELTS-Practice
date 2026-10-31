@@ -382,14 +382,19 @@ export function Player({
     <main
       style={{
         fontFamily: 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif',
-        width: '100%',
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        width: '100vw',
         height: '100vh',
         maxWidth: '100%',
         display: 'flex',
         flexDirection: 'column',
         overflow: 'hidden',
         backgroundColor: '#ffffff',
-        position: 'relative',
+        zIndex: 10,
       }}
     >
       <style>{`
@@ -411,6 +416,18 @@ export function Player({
         .ielts-pane-scroll::-webkit-scrollbar-thumb:hover {
           background: #94a3b8;
         }
+        .ielts-split-container {
+          flex: 1 1 0;
+          min-height: 0;
+          height: 100%;
+          overflow: hidden;
+        }
+        .ielts-split-container > section {
+          min-height: 0;
+          height: 100%;
+          overflow-y: auto;
+          box-sizing: border-box;
+        }
         @media (max-width: 860px) {
           .ielts-split-container {
             grid-template-columns: 1fr !important;
@@ -420,9 +437,11 @@ export function Player({
             border-right: none !important;
             border-bottom: 2px solid #e2e8f0 !important;
             height: auto !important;
+            min-height: auto !important;
           }
           .ielts-split-right {
             height: auto !important;
+            min-height: auto !important;
           }
         }
       `}</style>

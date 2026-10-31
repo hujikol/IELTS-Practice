@@ -2,6 +2,8 @@
 // Guarantees the neural TTS model (Kokoro fp32 high quality) is downloaded at most once
 // and cached locally in the browser's CacheStorage and IndexedDB for permanent offline reuse.
 
+import { voiceForPart, NARRATOR_VOICE, type VoiceMapEntry } from './voices.ts';
+
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const STORAGE_FLAG = 'ielts_audio_model_cached_fp32';
 const DB_NAME = 'ielts_studio_audio_db';
@@ -179,6 +181,62 @@ export async function synthesizeSpeechAudio(
   const blob = rawAudio.toBlob();
   await setCachedAudioBlob(cacheKey, blob);
   return blob;
+}
+
+/**
+ * Pre-generate speech audio for an entire listening script and store in IndexedDB.
+ * Guarantees zero latency and instantaneous playback in the test player.
+ */
+export async function pregenerateListeningAudio(
+  script: { speaker?: string; text?: string }[],
+  partNumber: number,
+  voiceMap: Record<string, VoiceMapEntry>,
+  onProgress?: (done: number, total: number, snippet: string) => void,
+): Promise<void> {
+  if (!script || script.length === 0) return;
+
+  const validLines = script.filter((s) => s && s.text && s.text.trim().length > 0);
+  const total = validLines.length;
+
+  for (let i = 0; i < total; i++) {
+    const line = validLines[i]!;
+    const speakerType =
+      line.speaker === 'woman' || /female|_f_/i.test(line.speaker || '')
+        ? 'woman'
+        : line.speaker === 'man' || /male|_m_/i.test(line.speaker || '')
+          ? 'man'
+          : 'narrator';
+
+    const voiceId = voiceForPart(voiceMap, partNumber, speakerType);
+    onProgress?.(i + 1, total, line.text!.slice(0, 30));
+
+    try {
+      await synthesizeSpeechAudio(line.text!, voiceId, 1.0);
+    } catch (err) {
+      console.warn(`[IELTS Studio] Warning: Pre-rendering voice line ${i + 1} failed:`, err);
+    }
+  }
+
+  // Pre-generate standard IELTS intro and review prompts for this part
+  try {
+    await synthesizeSpeechAudio(
+      `Section ${partNumber}. You will hear a discussion or monologue. First, you have some time to look at the questions.`,
+      NARRATOR_VOICE,
+      1.0,
+    );
+    await synthesizeSpeechAudio(
+      'Now listen carefully and answer questions.',
+      NARRATOR_VOICE,
+      1.0,
+    );
+    await synthesizeSpeechAudio(
+      `That is the end of Part ${partNumber}. You now have half a minute to check your answers.`,
+      NARRATOR_VOICE,
+      1.0,
+    );
+  } catch {
+    // Non-fatal
+  }
 }
 
 // ─── IndexedDB Generated Audio Cache ───
