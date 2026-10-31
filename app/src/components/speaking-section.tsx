@@ -28,7 +28,7 @@ interface SpeakingSectionProps {
 }
 
 type Step =
-  | 'mode-select'
+  | 'overview'
   | 'mic-check'
   | 'intro'
   | 'part1'
@@ -49,9 +49,9 @@ export function SpeakingSection({
   onFinish,
   onExit,
 }: SpeakingSectionProps) {
-  // Mode selection: Practice (unlimited) vs Exam (strict simulation)
-  const [mode, setMode] = useState<SpeakingMode>(initialMode === 'timed' ? 'exam' : 'practice');
-  const [step, setStep] = useState<Step>('mode-select');
+  // Mode is predetermined by the attempt mode picked at test generation
+  const mode: SpeakingMode = initialMode === 'timed' ? 'exam' : 'practice';
+  const [step, setStep] = useState<Step>('overview');
 
   // Media & stream state
   const streamRef = useRef<MediaStream | null>(null);
@@ -81,6 +81,9 @@ export function SpeakingSection({
   // Answers, Transcripts, and Notes
   const [transcriptsByQuestion, setTranscriptsByQuestion] = useState<Record<string, string>>({});
   const [liveTranscript, setLiveTranscript] = useState('');
+  const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
+  const [currentQuestionKey, setCurrentQuestionKey] = useState<string>('');
+  const [savedCurrentAudioDuration, setSavedCurrentAudioDuration] = useState<number | null>(null);
   const recognitionRef = useRef<ReturnType<typeof startLiveSpeechRecognition> | null>(null);
 
   // Part 2 Prep & Notes
@@ -230,6 +233,9 @@ export function SpeakingSection({
       setIsRecording(false);
       setLiveTranscript('');
       setQuestionElapsedS(0);
+      setCurrentQuestionKey(questionKey);
+      setSavedCurrentAudioDuration(null);
+      setSpeechRecognitionError(null);
 
       const controller = await speakExaminerQuestion(
         text,
@@ -254,14 +260,21 @@ export function SpeakingSection({
     if (!streamRef.current) return;
     setIsRecording(true);
     setQuestionElapsedS(0);
+    setCurrentQuestionKey(questionKey);
+    setSavedCurrentAudioDuration(null);
 
     // Live speech recognition for transcript
-    const recognizer = startLiveSpeechRecognition((text, isFinal) => {
-      setLiveTranscript(text);
-      if (isFinal) {
-        setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: text }));
-      }
-    });
+    const recognizer = startLiveSpeechRecognition(
+      (text, isFinal) => {
+        setLiveTranscript(text);
+        if (isFinal) {
+          setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: text }));
+        }
+      },
+      (err) => {
+        setSpeechRecognitionError(err);
+      },
+    );
     recognitionRef.current = recognizer;
 
     // MediaRecorder
@@ -271,7 +284,7 @@ export function SpeakingSection({
       vadMinSpeechS: 3,
       onVolume: (lvl) => setMicLevel(lvl),
       onAutoStop: (reason) => {
-        void rec.stop(reason).then(async ({ blob, durationS, endReason }) => {
+        void rec.stop(reason).then(async ({ blob, durationS }) => {
           setIsRecording(false);
           if (recognizer) recognizer.stop();
 
@@ -282,6 +295,7 @@ export function SpeakingSection({
             duration: durationS,
             createdAt: Date.now(),
           };
+          setSavedCurrentAudioDuration(durationS);
 
           if (onAutoAdvance) {
             onAutoAdvance();
@@ -314,10 +328,17 @@ export function SpeakingSection({
 
       const finalTxt = liveTranscript.trim() || transcriptsByQuestion[questionKey] || '';
       setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: finalTxt }));
+      setSavedCurrentAudioDuration(durationS);
       return { transcript: finalTxt, duration: durationS };
     }
 
-    return { transcript: liveTranscript, duration: 0 };
+    return { transcript: liveTranscript, duration: savedCurrentAudioDuration || 0 };
+  };
+
+  // Explicitly finish speaking & stop recording early for the current question
+  const handleStopRecordingCurrent = async () => {
+    if (!currentQuestionKey || !isRecording) return;
+    await stopLearnerRecording(currentQuestionKey);
   };
 
   // Timer for question elapsed
@@ -547,10 +568,10 @@ export function SpeakingSection({
         fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif",
       }}
     >
-      {/* ─── SCREEN 1: MODE SELECT ─── */}
-      {step === 'mode-select' && (
+      {/* ─── SCREEN 1: SPEAKING TEST OVERVIEW & START ─── */}
+      {step === 'overview' && (
         <section
-          aria-labelledby="speaking-mode-title"
+          aria-labelledby="speaking-overview-title"
           style={{
             background: '#ffffff',
             border: '1px solid #e2e8f0',
@@ -559,87 +580,123 @@ export function SpeakingSection({
             boxShadow: '0 2px 8px rgba(15, 23, 42, 0.05)',
           }}
         >
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, marginBottom: 8 }}>
-            <span style={{ fontSize: '1.8rem' }}>🗣️</span>
+          <div style={{ display: 'flex', alignItems: 'center', gap: 14, marginBottom: 20 }}>
+            <div
+              style={{
+                width: 48,
+                height: 48,
+                borderRadius: 12,
+                background: '#eff6ff',
+                color: '#2563eb',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.6rem',
+                flexShrink: 0,
+                border: '1px solid #bfdbfe',
+              }}
+            >
+              🗣️
+            </div>
             <div>
-              <h2 id="speaking-mode-title" style={{ margin: 0, fontSize: '1.45rem', fontWeight: 800, color: '#0f172a' }}>
+              <h2 id="speaking-overview-title" style={{ margin: 0, fontSize: '1.45rem', fontWeight: 800, color: '#0f172a' }}>
                 IELTS Speaking Interview
               </h2>
               <p style={{ margin: '3px 0 0', fontSize: '0.9rem', color: '#64748b' }}>
-                11 to 14 minutes · 1-on-1 examiner audio simulation with voice recording.
+                11 to 14 minutes · 3-Part authentic 1-on-1 interview with examiner audio simulation.
               </p>
             </div>
           </div>
 
-          <div style={{ margin: '24px 0 28px' }}>
-            <label style={{ display: 'block', fontSize: '0.85rem', fontWeight: 700, color: '#334155', marginBottom: 12 }}>
-              Choose Your Practice Mode:
-            </label>
-
-            <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 14 }}>
-              {/* Practice Mode */}
-              <div
-                role="radio"
-                aria-checked={mode === 'practice'}
-                tabIndex={0}
-                onClick={() => setMode('practice')}
-                onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && setMode('practice')}
+          {/* Test Mode Card (Inherited automatically from test generation settings) */}
+          <div
+            style={{
+              background: mode === 'exam' ? '#eff6ff' : '#f0fdf4',
+              border: `1px solid ${mode === 'exam' ? '#bfdbfe' : '#bbf7d0'}`,
+              borderRadius: 12,
+              padding: '16px 20px',
+              marginBottom: 18,
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                <span style={{ fontSize: '1.1rem' }}>{mode === 'exam' ? '⏱' : '∞'}</span>
+                <strong style={{ fontSize: '1rem', color: mode === 'exam' ? '#1e40af' : '#166534' }}>
+                  {mode === 'exam' ? 'Official Exam Simulation Mode' : 'Self-Paced Practice Mode (Untimed)'}
+                </strong>
+              </div>
+              <span
                 style={{
-                  border: '2px solid',
-                  borderColor: mode === 'practice' ? '#2563eb' : '#e2e8f0',
-                  background: mode === 'practice' ? '#eff6ff' : '#ffffff',
-                  borderRadius: 12,
-                  padding: 20,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
+                  fontSize: '0.74rem',
+                  fontWeight: 700,
+                  padding: '2px 10px',
+                  borderRadius: 9999,
+                  backgroundColor: mode === 'exam' ? '#dbeafe' : '#dcfce7',
+                  color: mode === 'exam' ? '#1e40af' : '#166534',
+                  border: `1px solid ${mode === 'exam' ? '#bfdbfe' : '#bbf7d0'}`,
                 }}
               >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <strong style={{ fontSize: '1.05rem', color: mode === 'practice' ? '#1d4ed8' : '#0f172a' }}>
-                    ∞ Practice Mode (Untimed)
-                  </strong>
-                  {mode === 'practice' && (
-                    <span style={{ background: '#2563eb', color: '#fff', fontSize: '0.72rem', padding: '2px 8px', borderRadius: 9999, fontWeight: 700 }}>
-                      Selected
-                    </span>
-                  )}
-                </div>
-                <p style={{ margin: 0, fontSize: '0.82rem', color: '#64748b', lineHeight: 1.45 }}>
-                  Learning &amp; rehearsal mode. Question text is visible, unlimited retakes, pause anytime, live transcript previews, and notes available in all parts.
-                </p>
-              </div>
+                Active Test Mode
+              </span>
+            </div>
+            <p style={{ margin: 0, fontSize: '0.84rem', color: mode === 'exam' ? '#1e3a8a' : '#14532d', lineHeight: 1.5 }}>
+              {mode === 'exam'
+                ? 'Authentic Cambridge examination conditions: Audio-only questions (prompts hidden during playback), single take, strict 60s Part 2 preparation with 2:00 auto-stop, and official Cambridge rubric scoring.'
+                : 'Learning & rehearsal mode: Prompt text is visible, replay questions anytime, unlimited retakes, live transcript previews, and notepad available throughout all parts.'}
+            </p>
+          </div>
 
-              {/* Exam Mode */}
-              <div
-                role="radio"
-                aria-checked={mode === 'exam'}
-                tabIndex={0}
-                onClick={() => setMode('exam')}
-                onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && setMode('exam')}
-                style={{
-                  border: '2px solid',
-                  borderColor: mode === 'exam' ? '#2563eb' : '#e2e8f0',
-                  background: mode === 'exam' ? '#eff6ff' : '#ffffff',
-                  borderRadius: 12,
-                  padding: 20,
-                  cursor: 'pointer',
-                  transition: 'all 0.15s ease',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                  <strong style={{ fontSize: '1.05rem', color: mode === 'exam' ? '#1d4ed8' : '#0f172a' }}>
-                    ⏱ Official Exam Simulation
-                  </strong>
-                  {mode === 'exam' && (
-                    <span style={{ background: '#2563eb', color: '#fff', fontSize: '0.72rem', padding: '2px 8px', borderRadius: 9999, fontWeight: 700 }}>
-                      Selected
-                    </span>
-                  )}
-                </div>
-                <p style={{ margin: 0, fontSize: '0.82rem', color: '#64748b', lineHeight: 1.45 }}>
-                  Authentic exam conditions. Audio-only questions (text hidden), one single take, strict Part 2 60s prep &amp; 2:00 auto-stop, and full Cambridge criteria scoring.
-                </p>
+          {/* Assigned Examiner Card */}
+          <div
+            style={{
+              background: '#f8fafc',
+              border: '1px solid #e2e8f0',
+              borderRadius: 12,
+              padding: '16px 20px',
+              marginBottom: 18,
+              display: 'flex',
+              alignItems: 'center',
+              gap: 14,
+            }}
+          >
+            <div
+              style={{
+                width: 44,
+                height: 44,
+                borderRadius: '50%',
+                background: '#2563eb',
+                color: '#ffffff',
+                display: 'flex',
+                alignItems: 'center',
+                justifyContent: 'center',
+                fontSize: '1.25rem',
+                flexShrink: 0,
+              }}
+            >
+              👤
+            </div>
+            <div style={{ flex: 1 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, flexWrap: 'wrap' }}>
+                <strong style={{ fontSize: '0.98rem', color: '#0f172a' }}>{examiner.name}</strong>
+                <span
+                  style={{
+                    fontSize: '0.72rem',
+                    fontWeight: 700,
+                    padding: '2px 8px',
+                    borderRadius: 9999,
+                    backgroundColor: '#e2e8f0',
+                    color: '#334155',
+                  }}
+                >
+                  {examiner.title}
+                </span>
+                <span style={{ fontSize: '0.75rem', color: '#64748b' }}>
+                  • {examiner.accent} Accent (Local Neural Voice)
+                </span>
               </div>
+              <p style={{ margin: '3px 0 0', fontSize: '0.82rem', color: '#64748b' }}>
+                Your interviewer will guide you through Part 1 (Introduction), Part 2 (Long Turn), and Part 3 (Two-way Discussion).
+              </p>
             </div>
           </div>
 
@@ -650,8 +707,8 @@ export function SpeakingSection({
             </strong>
             <ul style={{ margin: 0, paddingLeft: 20, fontSize: '0.82rem', color: '#64748b', lineHeight: 1.6 }}>
               <li>Find a quiet environment without background talking or loud fans.</li>
-              <li>Headphones or a headset are recommended to prevent mic echo.</li>
-              <li>Microphone access will be tested on the next screen.</li>
+              <li>Headphones or a headset are recommended to prevent microphone echo.</li>
+              <li>Clicking <strong>Start Speaking Test</strong> will check your microphone before the examiner begins speaking.</li>
             </ul>
           </div>
 
@@ -670,7 +727,7 @@ export function SpeakingSection({
                 void initMic();
               }}
             >
-              Continue to Microphone Check →
+              Start Speaking Test →
             </Button>
           </div>
         </section>
@@ -756,8 +813,8 @@ export function SpeakingSection({
           )}
 
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', paddingTop: 16, borderTop: '1px solid #f1f5f9' }}>
-            <Button variant="outline" size="sm" onClick={() => setStep('mode-select')}>
-              ← Back to Mode Select
+            <Button variant="outline" size="sm" onClick={() => setStep('overview')}>
+              ← Back to Overview
             </Button>
             <Button
               variant="success"
@@ -766,14 +823,14 @@ export function SpeakingSection({
               disabled={!micReady}
               onClick={startIntro}
             >
-              Start Official Interview →
+              Begin Interview with Examiner →
             </Button>
           </div>
         </section>
       )}
 
       {/* ─── ACTIVE INTERVIEW STAGES (INTRO, PART 1, PART 2, PART 3) ─── */}
-      {step !== 'mode-select' && step !== 'mic-check' && step !== 'finished' && (
+      {step !== 'overview' && step !== 'mic-check' && step !== 'finished' && (
         <section
           style={{
             flex: 1,
@@ -1061,14 +1118,38 @@ export function SpeakingSection({
           {mode === 'practice' && (
             <div style={{ background: '#f8fafc', border: '1px solid #e2e8f0', borderRadius: 10, padding: '12px 16px', marginBottom: 16 }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
-                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748b' }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748b', display: 'flex', alignItems: 'center', gap: 6 }}>
+                  {isRecording && <span style={{ display: 'inline-block', width: 8, height: 8, borderRadius: '50%', background: '#16a34a' }} />}
                   Live Transcript Preview (Practice Mode)
                 </span>
                 <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>Real-time verbatim recognition</span>
               </div>
-              <div style={{ fontSize: '0.88rem', color: liveTranscript ? '#0f172a' : '#94a3b8', fontStyle: liveTranscript ? 'normal' : 'italic' }}>
-                {liveTranscript || 'Your spoken words will appear here as you speak...'}
-              </div>
+              {isExaminerSpeaking ? (
+                <div style={{ fontSize: '0.88rem', color: '#64748b', fontStyle: 'italic' }}>
+                  ⏳ Examiner is speaking... recording will begin automatically when the question finishes.
+                </div>
+              ) : speechRecognitionError ? (
+                <div style={{ fontSize: '0.84rem', color: '#475569', lineHeight: 1.5 }}>
+                  <div style={{ color: '#b45309', fontWeight: 600, marginBottom: 2 }}>
+                    ℹ️ Real-time speech preview unavailable (
+                    {speechRecognitionError === 'unsupported'
+                      ? 'Browser does not support SpeechRecognition'
+                      : speechRecognitionError === 'network'
+                        ? 'Requires network connection to Google Speech API'
+                        : speechRecognitionError === 'not-allowed'
+                          ? 'Microphone permission blocked for speech recognition'
+                          : speechRecognitionError}
+                    )
+                  </div>
+                  <div style={{ color: '#15803d', fontWeight: 500, fontSize: '0.8rem' }}>
+                    ✅ Your actual microphone voice audio is still actively recording and will be saved!
+                  </div>
+                </div>
+              ) : (
+                <div style={{ fontSize: '0.88rem', color: liveTranscript ? '#0f172a' : '#94a3b8', fontStyle: liveTranscript ? 'normal' : 'italic' }}>
+                  {liveTranscript || (isRecording ? 'Listening... start speaking and your words will appear here.' : 'Your spoken words will appear here as you speak...')}
+                </div>
+              )}
             </div>
           )}
 
@@ -1091,7 +1172,31 @@ export function SpeakingSection({
               )}
             </div>
 
-            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+              {isRecording && !isExaminerSpeaking && (
+                <Button
+                  variant="outline"
+                  size="md"
+                  icon="⏹"
+                  onClick={() => void handleStopRecordingCurrent()}
+                  title="Finish speaking for this question and save audio to storage"
+                >
+                  Done Speaking (Stop)
+                </Button>
+              )}
+
+              {savedCurrentAudioDuration !== null && !isRecording && (
+                <span style={{ fontSize: '0.8rem', color: '#16a34a', fontWeight: 600, display: 'inline-flex', alignItems: 'center', gap: 4 }}>
+                  <span>✅</span> Audio saved ({savedCurrentAudioDuration}s)
+                </span>
+              )}
+
+              {savedCurrentAudioDuration === null && isRecording && (
+                <span style={{ fontSize: '0.78rem', color: '#64748b', display: 'inline-flex', alignItems: 'center', gap: 4 }} title="Clicking Next automatically saves your voice recording">
+                  <span>💾</span> Auto-saves on Next
+                </span>
+              )}
+
               {step === 'intro' && (
                 <Button variant="primary" size="md" icon="→" onClick={startPart1}>
                   Start Part 1 Questions →

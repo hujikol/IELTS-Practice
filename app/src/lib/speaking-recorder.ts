@@ -283,12 +283,22 @@ export async function getSpeakingAudioBlob(storageKey: string): Promise<Blob | n
   }
 }
 
+/** Check whether live speech recognition is supported in current browser */
+export function isSpeechRecognitionSupported(): boolean {
+  if (typeof window === 'undefined') return false;
+  return Boolean(
+    (window as unknown as { SpeechRecognition?: any }).SpeechRecognition ||
+    (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition,
+  );
+}
+
 /**
  * Native SpeechRecognition transcription listener (Web Speech API).
  * Provides live verbatim words with fillers and false starts for immediate feedback.
  */
 export function startLiveSpeechRecognition(
   onTranscript: (fullText: string, isFinal: boolean) => void,
+  onError?: (errorType: string) => void,
 ): { stop: () => void } | null {
   if (typeof window === 'undefined') return null;
 
@@ -296,36 +306,50 @@ export function startLiveSpeechRecognition(
     (window as unknown as { SpeechRecognition?: any }).SpeechRecognition ||
     (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition;
 
-  if (!SpeechRecognitionClass) return null;
+  if (!SpeechRecognitionClass) {
+    if (onError) onError('unsupported');
+    return null;
+  }
 
   let active = true;
   let recognition: any = null;
-  let accumulatedFinal = '';
 
   try {
     recognition = new SpeechRecognitionClass();
     recognition.continuous = true;
     recognition.interimResults = true;
-    recognition.lang = 'en-GB';
+    // Prefer user's active English dialect or default to en-US for maximum cloud recognizer compatibility
+    const preferredLang =
+      typeof navigator !== 'undefined' && navigator.language && navigator.language.startsWith('en')
+        ? navigator.language
+        : 'en-US';
+    recognition.lang = preferredLang;
 
     recognition.onresult = (event: any) => {
       if (!active) return;
-      let interim = '';
-      for (let i = event.resultIndex; i < event.results.length; ++i) {
+      let finalStr = '';
+      let interimStr = '';
+      for (let i = 0; i < event.results.length; ++i) {
         const item = event.results[i];
-        if (item.isFinal) {
-          accumulatedFinal += (accumulatedFinal ? ' ' : '') + item[0].transcript.trim();
-        } else {
-          interim += item[0].transcript;
+        if (item && item[0]) {
+          if (item.isFinal) {
+            finalStr += (finalStr ? ' ' : '') + item[0].transcript.trim();
+          } else {
+            interimStr += (interimStr ? ' ' : '') + item[0].transcript.trim();
+          }
         }
       }
 
-      const combined = (accumulatedFinal + (interim ? ' ' + interim : '')).trim();
-      onTranscript(combined, Boolean(accumulatedFinal && !interim));
+      const combined = (finalStr + (interimStr ? ' ' + interimStr : '')).trim();
+      onTranscript(combined, Boolean(finalStr && !interimStr));
     };
 
-    recognition.onerror = () => {
-      // Speech recognition error (e.g. no speech or network) — graceful silence
+    recognition.onerror = (event: any) => {
+      const err = event?.error || 'unknown';
+      if (err !== 'no-speech') {
+        console.warn('[IELTS Studio] SpeechRecognition error:', err);
+        if (onError) onError(err);
+      }
     };
 
     recognition.onend = () => {
@@ -342,6 +366,7 @@ export function startLiveSpeechRecognition(
     recognition.start();
   } catch (err) {
     console.warn('[IELTS Studio] SpeechRecognition not active:', err);
+    if (onError) onError('init_failed');
     return null;
   }
 
