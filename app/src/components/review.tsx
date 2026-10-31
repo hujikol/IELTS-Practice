@@ -4,11 +4,12 @@
 
 import { useState, useEffect, useMemo } from 'react';
 import type { FinalReport, WeaknessItem } from '../lib/scoring.ts';
-import type { AttemptRecord, TestData, Question } from '../lib/types.ts';
+import { countWords, type AttemptRecord, type TestData, type Question } from '../lib/types.ts';
 import { generateFinalReport } from '../lib/assessment-coordinator.ts';
 import { isWritingAttempted, isSpeakingAttempted } from '../lib/attempts.ts';
 import { ieltsBandToCefr } from '../lib/bands.ts';
 import { Button } from './ui/button.tsx';
+import { VisualRenderer } from './visual-renderer.tsx';
 
 interface ReviewProps {
   data: TestData;
@@ -27,6 +28,7 @@ export function Review({
   const [loadingReport, setLoadingReport] = useState(false);
   const [evaluatingAi, setEvaluatingAi] = useState(false);
   const [aiError, setAiError] = useState<string | null>(null);
+  const [copiedTask, setCopiedTask] = useState<number | null>(null);
 
   // Question review filters
   const [objectiveFilter, setObjectiveFilter] = useState<'all' | 'wrong' | 'unanswered'>('all');
@@ -817,78 +819,243 @@ export function Review({
               </p>
             </div>
           ) : (
-            writingTasks.map((task) => (
-              <article
-                key={task.task}
-                style={{
-                  backgroundColor: '#ffffff',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '14px',
-                  padding: '22px 24px',
-                  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.03)',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px' }}>
-                  <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
-                    Writing Task {task.task} Performance (Band {task.band.toFixed(1)})
-                  </h3>
-                  <span style={{ fontSize: '12px', fontWeight: 700, padding: '3px 8px', borderRadius: '6px', backgroundColor: '#eff6ff', color: '#1d4ed8' }}>
-                    {task.task === 1 ? '150 words min' : '250 words min'}
-                  </span>
-                </div>
+            writingTasks.map((task) => {
+              const taskIndex = task.task - 1;
+              const taskMeta = testRecord.writing?.[taskIndex];
+              const submittedText = (testRecord.texts?.[taskIndex] ?? '').trim();
+              const words = countWords(submittedText);
+              const minWords = taskMeta?.minimum ?? (task.task === 1 ? 150 : 250);
+              const meetsMin = words >= minWords;
 
-                {/* 4 Public Criteria Breakdown */}
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginBottom: '18px' }}>
-                  {Object.entries(task.criteria).map(([criterion, data]) => (
-                    <div key={criterion} style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: '11px', textTransform: 'capitalize', color: '#64748b', fontWeight: 700 }}>
-                        {criterion.replace('_', ' ')}
+              return (
+                <article
+                  key={task.task}
+                  style={{
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '16px',
+                    padding: '24px 28px',
+                    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+                  }}
+                >
+                  {/* Task Header & Overall Band */}
+                  <div
+                    style={{
+                      display: 'flex',
+                      justifyContent: 'space-between',
+                      alignItems: 'center',
+                      flexWrap: 'wrap',
+                      gap: 12,
+                      paddingBottom: '16px',
+                      borderBottom: '1px solid #f1f5f9',
+                      marginBottom: '20px',
+                    }}
+                  >
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: '#6d28d9', letterSpacing: '0.05em', marginBottom: 2 }}>
+                        IELTS Academic Writing · Task {task.task}
                       </div>
-                      <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>
-                        Band {data.band.toFixed(1)}
-                      </div>
-                      <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.35 }}>
-                        {data.next_band_gap || 'Maintain precise academic register.'}
-                      </div>
+                      <h3 style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>
+                        {taskMeta?.title || `Writing Task ${task.task}`}
+                      </h3>
                     </div>
-                  ))}
-                </div>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        style={{
+                          fontSize: '0.88rem',
+                          fontWeight: 800,
+                          padding: '4px 12px',
+                          borderRadius: '8px',
+                          backgroundColor: '#f5f3ff',
+                          color: '#6d28d9',
+                          border: '1px solid #ddd6fe',
+                        }}
+                      >
+                        Band {task.band.toFixed(1)}
+                      </span>
+                    </div>
+                  </div>
 
-                {/* Error Annotations */}
-                {task.errors.length > 0 && (
-                  <div style={{ marginBottom: '18px' }}>
-                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>
-                      Identified Errors &amp; Corrections
-                    </h4>
-                    <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
-                      {task.errors.map((err, errIdx) => (
-                        <div key={errIdx} style={{ backgroundColor: '#fff1f2', border: '1px solid #fecdd3', borderRadius: '6px', padding: '8px 12px', fontSize: '12px' }}>
-                          <span style={{ color: '#be123c', fontWeight: 700 }}>&ldquo;{err.span}&rdquo;</span>
-                          <span style={{ margin: '0 8px', color: '#94a3b8' }}>→</span>
-                          <span style={{ color: '#047857', fontWeight: 700 }}>{err.correction}</span>
-                          <span style={{ marginLeft: '10px', color: '#64748b' }}>({err.category})</span>
+                  {/* Task Prompt Reference Callout */}
+                  {taskMeta?.prompt && (
+                    <details
+                      style={{
+                        backgroundColor: '#f8fafc',
+                        border: '1px solid #e2e8f0',
+                        borderRadius: '10px',
+                        padding: '12px 16px',
+                        marginBottom: '20px',
+                      }}
+                      open
+                    >
+                      <summary
+                        style={{
+                          fontSize: '0.84rem',
+                          fontWeight: 700,
+                          color: '#334155',
+                          cursor: 'pointer',
+                          display: 'flex',
+                          alignItems: 'center',
+                          gap: 6,
+                          userSelect: 'none',
+                        }}
+                      >
+                        <span>📋 Task {task.task} Prompt &amp; Instructions</span>
+                      </summary>
+                      <div style={{ marginTop: '10px', fontSize: '0.92rem', color: '#334155', lineHeight: 1.6, whiteSpace: 'pre-line' }}>
+                        {taskMeta.prompt}
+                      </div>
+                      {taskMeta.visual && (
+                        <div style={{ marginTop: '14px', paddingTop: '12px', borderTop: '1px solid #e2e8f0' }}>
+                          <VisualRenderer visual={taskMeta.visual} />
                         </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
+                      )}
+                    </details>
+                  )}
 
-                {/* Model Answer (Band 9) */}
-                {task.model_answer && (
-                  <div style={{ backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '10px', padding: '16px 18px' }}>
-                    <h4 style={{ margin: '0 0 6px 0', fontSize: '13px', fontWeight: 700, color: '#065f46' }}>
-                      Band 9 Benchmark Comparison
-                    </h4>
-                    <p style={{ margin: '0 0 10px 0', fontSize: '12.5px', color: '#047857', lineHeight: 1.5 }}>
-                      {task.model_answer}
-                    </p>
-                    <div style={{ fontSize: '11.5px', color: '#065f46' }}>
-                      <strong>Key Technique:</strong> Paraphrased the prompt accurately, highlighted primary trends without extraneous detail, and used fluent cohesive markers.
+                  {/* ─── YOUR SUBMITTED ESSAY / RESPONSE ─── */}
+                  <div
+                    style={{
+                      border: '1px solid #cbd5e1',
+                      borderRadius: '12px',
+                      backgroundColor: '#ffffff',
+                      marginBottom: '22px',
+                      overflow: 'hidden',
+                      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.03)',
+                    }}
+                  >
+                    <div
+                      style={{
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: 10,
+                        backgroundColor: '#f8fafc',
+                        padding: '10px 16px',
+                        borderBottom: '1px solid #e2e8f0',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <span style={{ fontSize: '1rem' }}>✍️</span>
+                        <strong style={{ fontSize: '0.88rem', color: '#0f172a' }}>
+                          Your Submitted Response
+                        </strong>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                        <span
+                          style={{
+                            fontSize: '0.78rem',
+                            fontWeight: 700,
+                            padding: '3px 8px',
+                            borderRadius: '6px',
+                            backgroundColor: meetsMin ? '#f0fdf4' : '#fff1f2',
+                            color: meetsMin ? '#15803d' : '#be123c',
+                            border: `1px solid ${meetsMin ? '#bbf7d0' : '#fecdd3'}`,
+                          }}
+                        >
+                          {words} words ({meetsMin ? `✓ Meets min ${minWords}` : `Under min ${minWords}`})
+                        </span>
+
+                        {submittedText && (
+                          <button
+                            type="button"
+                            onClick={() => {
+                              void navigator.clipboard.writeText(submittedText);
+                              setCopiedTask(task.task);
+                              setTimeout(() => setCopiedTask(null), 2000);
+                            }}
+                            style={{
+                              background: '#ffffff',
+                              border: '1px solid #cbd5e1',
+                              borderRadius: '6px',
+                              padding: '3px 9px',
+                              fontSize: '0.75rem',
+                              fontWeight: 600,
+                              color: copiedTask === task.task ? '#15803d' : '#475569',
+                              cursor: 'pointer',
+                              display: 'inline-flex',
+                              alignItems: 'center',
+                              gap: 4,
+                            }}
+                          >
+                            <span>{copiedTask === task.task ? '✓' : '📋'}</span>
+                            <span>{copiedTask === task.task ? 'Copied' : 'Copy Text'}</span>
+                          </button>
+                        )}
+                      </div>
+                    </div>
+
+                    <div
+                      style={{
+                        padding: '18px 20px',
+                        fontSize: '0.94rem',
+                        lineHeight: 1.75,
+                        color: submittedText ? '#1e293b' : '#94a3b8',
+                        whiteSpace: 'pre-wrap',
+                        fontStyle: submittedText ? 'normal' : 'italic',
+                        maxHeight: '400px',
+                        overflowY: 'auto',
+                      }}
+                    >
+                      {submittedText || 'No written response was submitted for this task during the test.'}
                     </div>
                   </div>
-                )}
-              </article>
-            ))
+
+                  {/* 4 Public Criteria Breakdown */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+                    {Object.entries(task.criteria).map(([criterion, data]) => (
+                      <div key={criterion} style={{ backgroundColor: '#f8fafc', padding: '12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '11px', textTransform: 'capitalize', color: '#64748b', fontWeight: 700 }}>
+                          {criterion.replace('_', ' ')}
+                        </div>
+                        <div style={{ fontSize: '18px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>
+                          Band {data.band.toFixed(1)}
+                        </div>
+                        <div style={{ fontSize: '11px', color: '#475569', lineHeight: 1.35 }}>
+                          {data.next_band_gap || 'Maintain precise academic register.'}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+
+                  {/* Error Annotations */}
+                  {task.errors.length > 0 && (
+                    <div style={{ marginBottom: '18px' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>
+                        Identified Errors &amp; Corrections
+                      </h4>
+                      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>
+                        {task.errors.map((err, errIdx) => (
+                          <div key={errIdx} style={{ backgroundColor: '#fff1f2', border: '1px solid #fecdd3', borderRadius: '6px', padding: '8px 12px', fontSize: '12px' }}>
+                            <span style={{ color: '#be123c', fontWeight: 700 }}>&ldquo;{err.span}&rdquo;</span>
+                            <span style={{ margin: '0 8px', color: '#94a3b8' }}>→</span>
+                            <span style={{ color: '#047857', fontWeight: 700 }}>{err.correction}</span>
+                            <span style={{ marginLeft: '10px', color: '#64748b' }}>({err.category})</span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Model Answer (Band 9) */}
+                  {task.model_answer && (
+                    <div style={{ backgroundColor: '#ecfdf5', border: '1px solid #a7f3d0', borderRadius: '10px', padding: '16px 18px' }}>
+                      <h4 style={{ margin: '0 0 6px 0', fontSize: '13px', fontWeight: 700, color: '#065f46' }}>
+                        Band 9 Benchmark Comparison
+                      </h4>
+                      <p style={{ margin: '0 0 10px 0', fontSize: '12.5px', color: '#047857', lineHeight: 1.5 }}>
+                        {task.model_answer}
+                      </p>
+                      <div style={{ fontSize: '11.5px', color: '#065f46' }}>
+                        <strong>Key Technique:</strong> Paraphrased the prompt accurately, highlighted primary trends without extraneous detail, and used fluent cohesive markers.
+                      </div>
+                    </div>
+                  )}
+                </article>
+              );
+            })
           )}
         </div>
       )}

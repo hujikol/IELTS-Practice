@@ -349,6 +349,57 @@ export function Player({
   };
   const marked = data.marked ?? [];
 
+  // Summary statistics per test section (marked questions & unanswered questions)
+  const sectionStats = useMemo(() => {
+    const stats: Record<number, { markedCount: number; unansweredCount: number; totalCount: number }> = {};
+
+    // Listening (phase 0)
+    const lQuestions = (view.listening || []).flatMap((b) => b.questions ?? []);
+    const lMarked = lQuestions.filter((q) => marked.includes(q.id)).length;
+    const lAnswered = lQuestions.filter(
+      (q) => data.responses[q.id] !== undefined && String(data.responses[q.id]).trim() !== '',
+    ).length;
+    stats[0] = {
+      markedCount: lMarked,
+      unansweredCount: Math.max(0, lQuestions.length - lAnswered),
+      totalCount: lQuestions.length,
+    };
+
+    // Reading (phase 1)
+    const rQuestions = (view.reading || []).flatMap((b) => b.questions ?? []);
+    const rMarked = rQuestions.filter((q) => marked.includes(q.id)).length;
+    const rAnswered = rQuestions.filter(
+      (q) => data.responses[q.id] !== undefined && String(data.responses[q.id]).trim() !== '',
+    ).length;
+    stats[1] = {
+      markedCount: rMarked,
+      unansweredCount: Math.max(0, rQuestions.length - rAnswered),
+      totalCount: rQuestions.length,
+    };
+
+    // Writing (phase 2)
+    const wTotal = (view.writing || []).length;
+    const wAnswered = (view.writing || []).filter((_, i) => (data.texts[i] ?? '').trim().length > 0).length;
+    stats[2] = {
+      markedCount: 0,
+      unansweredCount: Math.max(0, wTotal - wAnswered),
+      totalCount: wTotal,
+    };
+
+    // Speaking (phase 3)
+    const sTotal = (view.speaking || []).length;
+    const sAnswered = (view.speaking || []).filter(
+      (_, i) => (data.speakingTexts?.[i] ?? '').trim().length > 0,
+    ).length;
+    stats[3] = {
+      markedCount: 0,
+      unansweredCount: Math.max(0, sTotal - sAnswered),
+      totalCount: sTotal,
+    };
+
+    return stats;
+  }, [view, marked, data.responses, data.texts, data.speakingTexts]);
+
   const edit = (patch: Patch) => {
     setError('');
     session.enqueue(patch);
@@ -590,41 +641,133 @@ export function Player({
           {availableSections.map((sec, idx) => {
             const isActive = sec.phase === phase;
             const sectionIcon = sec.phase === 0 ? '🎧' : sec.phase === 1 ? '📖' : sec.phase === 2 ? '✍️' : '🗣️';
+            const stat = sectionStats[sec.phase] || { markedCount: 0, unansweredCount: 0, totalCount: sec.count };
+            const hasMarked = stat.markedCount > 0;
+            const isPrevious = sec.phase < phase;
+            const hasUnanswered = stat.unansweredCount > 0;
+            const isFullyAnswered = stat.unansweredCount === 0 && stat.totalCount > 0;
+
+            // Border & Background logic adhering to taste-skill / web-uix:
+            // Highlight with warm yellow/amber (#f59e0b / #fffbeb) when marked or previous section has unanswered questions
+            let borderColor = isActive ? '#1d4ed8' : '#e2e8f0';
+            let bgColor = isActive ? '#2563eb' : '#ffffff';
+            let textColor = isActive ? '#ffffff' : '#475569';
+
+            if (!isActive) {
+              if (hasMarked) {
+                borderColor = '#f59e0b';
+                bgColor = '#fffbeb';
+                textColor = '#92400e';
+              } else if (isPrevious && hasUnanswered) {
+                borderColor = '#fbbf24';
+                bgColor = '#fffdf5';
+                textColor = '#78350f';
+              }
+            }
+
             return (
               <button
                 key={sec.phase}
                 type="button"
                 onClick={() => switchSection(sec.phase)}
+                aria-label={`${sec.label} section: ${hasMarked ? `${stat.markedCount} marked for review, ` : ''}${hasUnanswered ? `${stat.unansweredCount} unanswered` : 'all answered'}`}
+                title={`${sec.label}: ${hasMarked ? `${stat.markedCount} marked for review` : 'No marked items'} · ${hasUnanswered ? `${stat.unansweredCount} unanswered` : 'All answered'} (${stat.totalCount} items)`}
                 style={{
                   display: 'flex',
                   alignItems: 'center',
                   gap: 8,
                   padding: '6px 14px',
                   borderRadius: 8,
-                  border: isActive ? '1px solid #1d4ed8' : '1px solid #e2e8f0',
-                  backgroundColor: isActive ? '#2563eb' : '#ffffff',
-                  color: isActive ? '#ffffff' : '#475569',
+                  border: `1.5px solid ${borderColor}`,
+                  backgroundColor: bgColor,
+                  color: textColor,
                   fontSize: 13,
                   fontWeight: isActive ? 700 : 500,
                   cursor: 'pointer',
-                  boxShadow: isActive ? '0 2px 6px rgba(37, 99, 235, 0.25)' : 'none',
+                  boxShadow: isActive
+                    ? '0 2px 6px rgba(37, 99, 235, 0.25)'
+                    : hasMarked
+                      ? '0 1px 4px rgba(245, 158, 11, 0.2)'
+                      : 'none',
                   transition: 'all 0.15s ease',
                   whiteSpace: 'nowrap',
                 }}
               >
                 <span>{sectionIcon} {idx + 1}. {sec.label}</span>
-                <span
-                  style={{
-                    fontSize: 11,
-                    padding: '2px 7px',
-                    borderRadius: 9999,
-                    backgroundColor: isActive ? 'rgba(255,255,255,0.22)' : '#f1f5f9',
-                    color: isActive ? '#ffffff' : '#64748b',
-                    fontWeight: 600,
-                  }}
-                >
-                  {sec.count} {sec.partLabel}{sec.count > 1 ? 's' : ''}
-                </span>
+
+                {/* Yellow Marked Badge */}
+                {hasMarked && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 9999,
+                      backgroundColor: '#fef3c7',
+                      color: '#92400e',
+                      border: '1px solid #fde68a',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                    }}
+                    title={`${stat.markedCount} question${stat.markedCount > 1 ? 's' : ''} marked for review in this section`}
+                  >
+                    <span aria-hidden="true">⚑</span> {stat.markedCount}
+                  </span>
+                )}
+
+                {/* Yellow/Amber Unanswered Warning for Previous Section */}
+                {!hasMarked && isPrevious && hasUnanswered && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 9999,
+                      backgroundColor: '#fef3c7',
+                      color: '#b45309',
+                      border: '1px solid #fde68a',
+                      fontWeight: 700,
+                      display: 'inline-flex',
+                      alignItems: 'center',
+                      gap: 3,
+                    }}
+                    title={`${stat.unansweredCount} question${stat.unansweredCount > 1 ? 's' : ''} left unanswered in this previous section`}
+                  >
+                    <span>⚠️</span> {stat.unansweredCount} left
+                  </span>
+                )}
+
+                {/* Completed Badge if all answered and none marked */}
+                {!hasMarked && isFullyAnswered && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 9999,
+                      backgroundColor: isActive ? 'rgba(255,255,255,0.22)' : '#f0fdf4',
+                      color: isActive ? '#ffffff' : '#16a34a',
+                      fontWeight: 600,
+                    }}
+                  >
+                    ✓ Complete
+                  </span>
+                )}
+
+                {/* Default parts count if in progress / upcoming */}
+                {!hasMarked && !(isPrevious && hasUnanswered) && !isFullyAnswered && (
+                  <span
+                    style={{
+                      fontSize: 11,
+                      padding: '2px 7px',
+                      borderRadius: 9999,
+                      backgroundColor: isActive ? 'rgba(255,255,255,0.22)' : '#f1f5f9',
+                      color: isActive ? '#ffffff' : '#64748b',
+                      fontWeight: 600,
+                    }}
+                  >
+                    {sec.count} {sec.partLabel}{sec.count > 1 ? 's' : ''}
+                  </span>
+                )}
               </button>
             );
           })}
@@ -1457,29 +1600,30 @@ export function Player({
               )}
             </div>
           )}
-          {index >= partCount - 1 && nextSection && (
+          {/* Persisted Section Progression Button (Always accessible to allow skipping ahead) */}
+          {nextSection && (
             <Button
-              variant="primary"
+              variant={index >= partCount - 1 ? 'primary' : 'outline'}
               size="md"
               onClick={goToNextSection}
               disabled={busy}
+              title={`Skip or advance to ${nextSection.label}`}
             >
               Continue to {nextSection.label} <span aria-hidden="true">→</span>
             </Button>
           )}
 
-          {(!nextSection || index >= partCount - 1) && (
-            <Button
-              variant={isLastSection ? 'success' : 'outline'}
-              size="md"
-              icon={isLastSection ? '🎓' : '✓'}
-              onClick={() => void finish()}
-              disabled={busy}
-              title={isLastSection ? 'Submit test and review results' : 'Finish early and review submitted sections'}
-            >
-              {busy ? 'Finishing…' : isLastSection ? 'Finish and Review' : 'Finish Test Early'}
-            </Button>
-          )}
+          {/* Persisted Finish Test Early / Finish and Review Button (Always accessible to skip entirely) */}
+          <Button
+            variant={isLastSection ? 'success' : 'outline'}
+            size="md"
+            icon={isLastSection ? '🎓' : '✓'}
+            onClick={() => void finish()}
+            disabled={busy}
+            title={isLastSection ? 'Submit test and review results' : 'Finish test early and review completed sections'}
+          >
+            {busy ? 'Finishing…' : isLastSection ? 'Finish and Review' : 'Finish Test Early'}
+          </Button>
         </div>
       </footer>
       )}

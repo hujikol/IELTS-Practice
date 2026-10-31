@@ -1164,12 +1164,21 @@ export function SpeakingSection({
               marginTop: 'auto',
             }}
           >
-            <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {onExit && (
                 <Button variant="ghost" size="sm" onClick={onExit}>
                   Exit Interview
                 </Button>
               )}
+              <Button
+                variant="outline"
+                size="sm"
+                icon="✓"
+                onClick={onFinish}
+                title="Finish speaking test early and proceed to diagnostic review"
+              >
+                Finish Test Early
+              </Button>
             </div>
 
             <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
