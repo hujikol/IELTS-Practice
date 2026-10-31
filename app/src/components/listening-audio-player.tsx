@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react';
 import type { ScriptLine } from '../lib/types.ts';
 import { Button } from './ui/button.tsx';
-import { HardwareSpecsModal } from './hardware-specs-modal.tsx';
+import { TtsSettingsModal } from './tts-settings-modal.tsx';
 import {
   isAudioModelCached,
   downloadAudioModelOnce,
@@ -729,8 +729,8 @@ export function ListeningAudioPlayer({
                     gap: '4px',
                   }}
                 >
-                  <span>⚡</span>
-                  <span>Minimum Device Specifications →</span>
+                  <span>⚙️</span>
+                  <span>TTS Model &amp; Cache Settings →</span>
                 </button>
               </div>
             </div>
@@ -800,8 +800,8 @@ export function ListeningAudioPlayer({
         </div>
       )}
 
-      {/* Hardware Specifications Modal */}
-      <HardwareSpecsModal
+      {/* TTS Settings & Hardware Specifications Modal */}
+      <TtsSettingsModal
         isOpen={showHwSpecsModal}
         onClose={() => setShowHwSpecsModal(false)}
       />

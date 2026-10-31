@@ -19,9 +19,14 @@ import { callProviderChat, loadProviderConfig, type ProviderConfig } from '../li
 import { AiConnectionModal, AiConnectionStatusPill } from './ai-connection.tsx';
 import { applyMaterial } from '../lib/material.ts';
 import { CONVERSATIONAL_LISTENING_BLOCK } from '../lib/sample-material.ts';
-import { pregenerateListeningAudio } from '../lib/audio-manager.ts';
+import {
+  pregenerateListeningAudio,
+  getTtsModelPreference,
+  TTS_MODELS,
+  type TtsModelType,
+} from '../lib/audio-manager.ts';
 import { randomizeVoiceMap } from '../lib/voices.ts';
-import { HardwareSpecsModal } from './hardware-specs-modal.tsx';
+import { TtsSettingsModal } from './tts-settings-modal.tsx';
 import { Button } from './ui/button.tsx';
 import type { ErrorCode, PrepJob, Scope, TestData } from '../lib/types.ts';
 
@@ -137,6 +142,7 @@ export function Preparation({
   const [pipelineStepMessage, setPipelineStepMessage] = useState<string>('');
   const [showAiModal, setShowAiModal] = useState(false);
   const [showHwSpecsModal, setShowHwSpecsModal] = useState(false);
+  const [currentTtsModel, setCurrentTtsModel] = useState<TtsModelType>(getTtsModelPreference);
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>(loadProviderConfig);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
 
@@ -423,15 +429,17 @@ export function Preparation({
           const script = block?.script;
           const partNum = bIdx + 1;
           if (Array.isArray(script) && script.length > 0) {
+            const activeModel = getTtsModelPreference();
+            const modelLabel = TTS_MODELS[activeModel]?.badge || 'Neural audio';
             setPipelineStepMessage(
-              `[Final Stage] Synthesizing local FP32 audio for Listening Part ${partNum} (0/${script.length})...`,
+              `[Final Stage] Synthesizing local voice (${modelLabel}) for Listening Part ${partNum} (0/${script.length})...`,
             );
             try {
               await pregenerateListeningAudio(script, partNum, vMap, (done, total) => {
                 setPipelineStepMessage(
-                  `[Final Stage] Synthesizing local FP32 audio for Listening Part ${partNum} (${done}/${total})...`,
+                  `[Final Stage] Synthesizing local voice (${modelLabel}) for Listening Part ${partNum} (${done}/${total})...`,
                 );
-              });
+              }, activeModel);
             } catch (audioErr) {
               console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
             }
@@ -804,9 +812,11 @@ export function Preparation({
               cursor: 'pointer',
               transition: 'all 0.15s ease',
             }}
-            title="View minimum and recommended device specifications for local neural TTS"
+            title="Configure TTS Model and manage audio cache storage"
           >
-            ⚡ Device Specs (Kokoro FP32)
+            <span>🎙️</span>
+            <span>TTS: {TTS_MODELS[currentTtsModel]?.badge || 'Kokoro FP32'}</span>
+            <span style={{ fontSize: '10px', color: '#64748b' }}>⚙️</span>
           </button>
           <AiConnectionStatusPill onClick={() => setShowAiModal(true)} config={providerConfig} />
           {isComplete && (
@@ -874,7 +884,8 @@ export function Preparation({
                   : 'Generate Complete Test (1-Click)'}
             </Button>
 
-            {jobs.some((j) => j.section === 'listening' && !record.data.prepared?.includes(j.key)) && (
+            {record.data.scope === 'listening' &&
+              jobs.some((j) => j.section === 'listening' && !record.data.prepared?.includes(j.key)) && (
               <Button
                 variant="secondary"
                 size="lg"
@@ -953,7 +964,7 @@ export function Preparation({
             <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
               <span aria-hidden="true" style={{ fontSize: '15px' }}>🎙️</span>
               <span>
-                <strong>Audio Execution Pipeline:</strong> All question sets are generated from AI first. Voice synthesis executes locally on your device as the final action.
+                <strong>Audio Execution Pipeline:</strong> All question sets are generated from AI first. Voice synthesis executes locally using <strong>{TTS_MODELS[currentTtsModel]?.name}</strong> as the final action.
               </span>
             </div>
             <button
@@ -970,7 +981,7 @@ export function Preparation({
                 textDecoration: 'underline',
               }}
             >
-              View Minimum Device Specs →
+              Configure TTS &amp; Device Specs →
             </button>
           </div>
         </div>
@@ -1573,10 +1584,11 @@ export function Preparation({
         onConfigChanged={setProviderConfig}
       />
 
-      {/* Hardware Specifications Modal */}
-      <HardwareSpecsModal
+      {/* TTS Settings & Hardware Specifications Modal */}
+      <TtsSettingsModal
         isOpen={showHwSpecsModal}
         onClose={() => setShowHwSpecsModal(false)}
+        onModelChanged={(m) => setCurrentTtsModel(m)}
       />
 
       <style>{`

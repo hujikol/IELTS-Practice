@@ -1,14 +1,127 @@
 // Audio Manager & Model Cache Controller.
-// Guarantees the neural TTS model (Kokoro fp32 high quality) is downloaded at most once
-// and cached locally in the browser's CacheStorage and IndexedDB for permanent offline reuse.
+// Configures on-device neural TTS models (Kokoro FP32, Q8, Q4, or Web Speech API fallback)
+// and manages offline storage, IndexedDB audio caching, and cache clearing.
 
 import { voiceForPart, NARRATOR_VOICE, type VoiceMapEntry } from './voices.ts';
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
-const STORAGE_FLAG = 'ielts_audio_model_cached_fp32';
 const DB_NAME = 'ielts_studio_audio_db';
 const DB_VERSION = 1;
 const STORE_NAME = 'audio_clips';
+
+export type TtsModelType = 'kokoro-fp32' | 'kokoro-q8' | 'kokoro-q4' | 'webspeech';
+
+export type TtsModelInfo = {
+  id: TtsModelType;
+  name: string;
+  badge: string;
+  badgeColor: string;
+  dtype?: 'fp32' | 'q8' | 'q4';
+  downloadSize: string;
+  storageEstimate: string;
+  minRam: string;
+  recRam: string;
+  minCpu: string;
+  recCpu: string;
+  description: string;
+  bestFor: string;
+};
+
+export const TTS_MODELS: Record<TtsModelType, TtsModelInfo> = {
+  'kokoro-fp32': {
+    id: 'kokoro-fp32',
+    name: 'Kokoro-82M (FP32 Full Precision)',
+    badge: 'Studio Fidelity',
+    badgeColor: '#1d4ed8',
+    dtype: 'fp32',
+    downloadSize: '~320 MB',
+    storageEstimate: '~350 MB',
+    minRam: '4 GB (~1.5 GB free heap)',
+    recRam: '8 GB+ RAM',
+    minCpu: '64-bit multi-core (x86-64 / ARM64)',
+    recCpu: 'Apple Silicon (M-series) or 4+ cores 2.0GHz+',
+    description: 'Highest neural voice fidelity with zero quantization artifacts. Flawless Cambridge/US cadence and subtle phonetic nuances.',
+    bestFor: 'Modern laptops and desktops with multi-core processors.',
+  },
+  'kokoro-q8': {
+    id: 'kokoro-q8',
+    name: 'Kokoro-82M (Q8 8-Bit Quantized)',
+    badge: 'Balanced / Recommended',
+    badgeColor: '#059669',
+    dtype: 'q8',
+    downloadSize: '~85 MB',
+    storageEstimate: '~95 MB',
+    minRam: '2 GB (~600 MB free heap)',
+    recRam: '4 GB+ RAM',
+    minCpu: 'Dual-core CPU 1.8GHz+',
+    recCpu: 'Quad-core CPU 2.0GHz+',
+    description: '75% smaller download than FP32 while preserving 95%+ of the acoustic quality. Fast on-device generation with light memory load.',
+    bestFor: 'Standard laptops, metered Wi-Fi, and quick downloads.',
+  },
+  'kokoro-q4': {
+    id: 'kokoro-q4',
+    name: 'Kokoro-82M (Q4 4-Bit Compact)',
+    badge: 'Lightweight & Fast',
+    badgeColor: '#d97706',
+    dtype: 'q4',
+    downloadSize: '~45 MB',
+    storageEstimate: '~50 MB',
+    minRam: '1.5 GB (~300 MB free heap)',
+    recRam: '2 GB+ RAM',
+    minCpu: 'Any 64-bit multi-core CPU',
+    recCpu: 'Dual-core 1.6GHz+',
+    description: 'Maximum compression for quick downloads and low memory consumption. Great speech intelligibility on budget devices.',
+    bestFor: 'Older machines, low-memory tabs, or battery saving.',
+  },
+  webspeech: {
+    id: 'webspeech',
+    name: 'Web Speech API (Native OS Engine)',
+    badge: 'Instant / Zero Download',
+    badgeColor: '#475569',
+    downloadSize: '0 MB (None)',
+    storageEstimate: '0 MB',
+    minRam: 'Any (0 MB extra)',
+    recRam: 'Any',
+    minCpu: 'Any CPU',
+    recCpu: 'Any CPU',
+    description: 'Uses your operating system\'s native speech engine (Siri, Microsoft Natural, or Chrome TTS). Zero download and instant playback.',
+    bestFor: 'Immediate practice with no network download or memory overhead.',
+  },
+};
+
+const TTS_MODEL_PREF_KEY = 'ielts_tts_model_preference';
+let inMemoryModelPref: TtsModelType = 'kokoro-fp32';
+
+export function getTtsModelPreference(): TtsModelType {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const val = localStorage.getItem(TTS_MODEL_PREF_KEY) as TtsModelType;
+      if (val && val in TTS_MODELS) {
+        return val;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return inMemoryModelPref;
+}
+
+export function setTtsModelPreference(modelId: TtsModelType): void {
+  inMemoryModelPref = modelId;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(TTS_MODEL_PREF_KEY, modelId);
+    } catch {
+      // ignore
+    }
+  }
+  const targetDtype = TTS_MODELS[modelId]?.dtype;
+  if (loadedDtype !== targetDtype) {
+    modelInstance = null;
+    downloadPromise = null;
+    loadedDtype = null;
+  }
+}
 
 export type ModelDownloadStatus = 'not_downloaded' | 'downloading' | 'ready' | 'error';
 
@@ -22,6 +135,7 @@ export type AudioProgressEvent = {
 // Singleton in-memory cache and promise lock to prevent duplicate downloads
 let modelInstance: unknown = null;
 let downloadPromise: Promise<unknown> | null = null;
+let loadedDtype: string | null = null;
 const listeners = new Set<(event: AudioProgressEvent) => void>();
 
 /** Subscribe to model download progress events */
@@ -40,12 +154,19 @@ function notify(event: AudioProgressEvent) {
   });
 }
 
-/** Check whether the audio model is already cached locally */
-export async function isAudioModelCached(): Promise<boolean> {
+function storageFlagFor(modelId: TtsModelType): string {
+  const info = TTS_MODELS[modelId];
+  return info?.dtype ? `ielts_audio_model_cached_${info.dtype}` : 'ielts_audio_model_cached_fp32';
+}
+
+/** Check whether the chosen audio model is already cached locally */
+export async function isAudioModelCached(targetModel?: TtsModelType): Promise<boolean> {
+  const modelId = targetModel || getTtsModelPreference();
+  if (modelId === 'webspeech') return true;
   if (typeof window === 'undefined') return false;
 
-  // Check localStorage flag first
-  if (localStorage.getItem(STORAGE_FLAG) === 'true') {
+  const flagKey = storageFlagFor(modelId);
+  if (localStorage.getItem(flagKey) === 'true') {
     return true;
   }
 
@@ -55,7 +176,7 @@ export async function isAudioModelCached(): Promise<boolean> {
       const keys = await window.caches.keys();
       const hasTransformersCache = keys.some((k) => k.includes('transformers') || k.includes('kokoro'));
       if (hasTransformersCache) {
-        localStorage.setItem(STORAGE_FLAG, 'true');
+        localStorage.setItem(flagKey, 'true');
         return true;
       }
     } catch {
@@ -68,25 +189,35 @@ export async function isAudioModelCached(): Promise<boolean> {
 
 /**
  * Downloads the neural audio model once with progress tracking,
- * configuring FP32 precision for maximum vocal quality.
+ * using the configured precision (FP32, Q8, or Q4).
  */
 export async function downloadAudioModelOnce(
   onProgress?: (progress: number, message: string) => void,
+  forcedModel?: TtsModelType,
 ): Promise<unknown> {
-  if (modelInstance) {
-    onProgress?.(100, 'FP32 Neural model already loaded in memory.');
+  const selectedModelId = forcedModel || getTtsModelPreference();
+  if (selectedModelId === 'webspeech') {
+    onProgress?.(100, 'Using Native Web Speech API (0 MB download).');
+    return null;
+  }
+
+  const modelInfo = TTS_MODELS[selectedModelId] || TTS_MODELS['kokoro-fp32'];
+  const targetDtype = modelInfo.dtype || 'fp32';
+
+  if (modelInstance && loadedDtype === targetDtype) {
+    onProgress?.(100, `${modelInfo.name} already loaded in memory.`);
     return modelInstance;
   }
 
-  if (downloadPromise) {
+  if (downloadPromise && loadedDtype === targetDtype) {
     return downloadPromise;
   }
 
-  const isCached = await isAudioModelCached();
+  const isCached = await isAudioModelCached(selectedModelId);
   notify({
     status: 'downloading',
     progress: isCached ? 90 : 0,
-    message: isCached ? 'Loading FP32 high-fidelity model from cache...' : 'Downloading Kokoro FP32 neural weights...',
+    message: isCached ? `Loading ${modelInfo.name} from cache...` : `Downloading ${modelInfo.name} weights (${modelInfo.downloadSize})...`,
   });
 
   downloadPromise = (async () => {
@@ -94,13 +225,12 @@ export async function downloadAudioModelOnce(
       // Dynamic import of kokoro-js to avoid blocking initial bundle
       const { KokoroTTS } = await import('kokoro-js');
 
-      // Use fp32 precision for highest quality voice generation
       const model = await KokoroTTS.from_pretrained(MODEL_ID, {
-        dtype: 'fp32',
+        dtype: targetDtype,
         device: 'wasm',
         progress_callback: (item: { progress?: number; status?: string; file?: string }) => {
           const rawPct = typeof item.progress === 'number' ? Math.round(item.progress) : 0;
-          const msg = item.file ? `Loading ${item.file}` : 'Fetching FP32 audio neural weights...';
+          const msg = item.file ? `Loading ${item.file}` : `Fetching ${modelInfo.name} weights...`;
           onProgress?.(rawPct, msg);
           notify({
             status: 'downloading',
@@ -112,14 +242,16 @@ export async function downloadAudioModelOnce(
       });
 
       modelInstance = model;
+      loadedDtype = targetDtype;
+
       if (typeof localStorage !== 'undefined') {
-        localStorage.setItem(STORAGE_FLAG, 'true');
+        localStorage.setItem(storageFlagFor(selectedModelId), 'true');
       }
 
       notify({
         status: 'ready',
         progress: 100,
-        message: 'Kokoro FP32 audio model ready and cached permanently.',
+        message: `${modelInfo.name} ready and cached offline.`,
       });
 
       return model;
@@ -128,7 +260,7 @@ export async function downloadAudioModelOnce(
       notify({
         status: 'error',
         progress: 0,
-        message: (err as Error).message || 'Failed to download FP32 audio model.',
+        message: (err as Error).message || `Failed to download ${modelInfo.name}.`,
       });
       throw err;
     }
@@ -147,31 +279,45 @@ function simpleHash(str: string): string {
 }
 
 /**
- * Synthesize speech audio using the Kokoro FP32 model, with automatic IndexedDB caching.
+ * Synthesize speech audio using the active TTS model, with automatic IndexedDB caching.
  * Returns an audio/wav Blob ready for playback.
  */
 export async function synthesizeSpeechAudio(
   text: string,
   voiceId = 'af_heart',
   speed = 1.0,
+  forcedModel?: TtsModelType,
 ): Promise<Blob> {
   const clean = text.trim();
   if (!clean) {
     return new Blob([], { type: 'audio/wav' });
   }
 
-  const cacheKey = `kokoro_fp32_${voiceId}_${speed.toFixed(2)}_${simpleHash(clean)}`;
+  const modelId = forcedModel || getTtsModelPreference();
+  if (modelId === 'webspeech') {
+    // Return empty blob to instruct player to use native Web Speech API fallback
+    return new Blob([], { type: 'audio/wav' });
+  }
+
+  const modelInfo = TTS_MODELS[modelId] || TTS_MODELS['kokoro-fp32'];
+  const targetDtype = modelInfo.dtype || 'fp32';
+
+  const cacheKey = `kokoro_${targetDtype}_${voiceId}_${speed.toFixed(2)}_${simpleHash(clean)}`;
   const cached = await getCachedAudioBlob(cacheKey);
   if (cached && cached.size > 0) {
     return cached;
   }
 
-  const model = (await downloadAudioModelOnce()) as {
+  const model = (await downloadAudioModelOnce(undefined, modelId)) as {
     generate: (
       text: string,
       opts: { voice: string; speed: number },
     ) => Promise<{ toBlob: () => Blob }>;
   };
+
+  if (!model || typeof model.generate !== 'function') {
+    return new Blob([], { type: 'audio/wav' });
+  }
 
   const rawAudio = await model.generate(clean, {
     voice: voiceId,
@@ -192,8 +338,16 @@ export async function pregenerateListeningAudio(
   partNumber: number,
   voiceMap: Record<string, VoiceMapEntry>,
   onProgress?: (done: number, total: number, snippet: string) => void,
+  forcedModel?: TtsModelType,
 ): Promise<void> {
   if (!script || script.length === 0) return;
+
+  const modelId = forcedModel || getTtsModelPreference();
+  if (modelId === 'webspeech') {
+    // Web Speech API synthesizes instantaneously on-demand, no pre-render needed
+    onProgress?.(script.length, script.length, 'Ready via Web Speech API');
+    return;
+  }
 
   const validLines = script.filter((s) => s && s.text && s.text.trim().length > 0);
   const total = validLines.length;
@@ -211,7 +365,7 @@ export async function pregenerateListeningAudio(
     onProgress?.(i + 1, total, line.text!.slice(0, 30));
 
     try {
-      await synthesizeSpeechAudio(line.text!, voiceId, 1.0);
+      await synthesizeSpeechAudio(line.text!, voiceId, 1.0, modelId);
     } catch (err) {
       console.warn(`[IELTS Studio] Warning: Pre-rendering voice line ${i + 1} failed:`, err);
     }
@@ -223,23 +377,26 @@ export async function pregenerateListeningAudio(
       `Section ${partNumber}. You will hear a discussion or monologue. First, you have some time to look at the questions.`,
       NARRATOR_VOICE,
       1.0,
+      modelId,
     );
     await synthesizeSpeechAudio(
       'Now listen carefully and answer questions.',
       NARRATOR_VOICE,
       1.0,
+      modelId,
     );
     await synthesizeSpeechAudio(
       `That is the end of Part ${partNumber}. You now have half a minute to check your answers.`,
       NARRATOR_VOICE,
       1.0,
+      modelId,
     );
   } catch {
     // Non-fatal
   }
 }
 
-// ─── IndexedDB Generated Audio Cache ───
+// ─── IndexedDB Generated Audio Cache & Management ───
 
 function openAudioDb(): Promise<IDBDatabase> {
   return new Promise((resolve, reject) => {
@@ -296,3 +453,120 @@ export async function setCachedAudioBlob(key: string, blob: Blob): Promise<void>
   }
 }
 
+export type AudioCacheStats = {
+  clipCount: number;
+  clipBytesEstimate: number;
+  isModelCached: boolean;
+  selectedModel: TtsModelType;
+};
+
+/** Get live audio cache statistics */
+export async function getAudioCacheStats(): Promise<AudioCacheStats> {
+  let clipCount = 0;
+  let clipBytesEstimate = 0;
+
+  try {
+    const db = await openAudioDb();
+    await new Promise<void>((resolve) => {
+      const tx = db.transaction(STORE_NAME, 'readonly');
+      const store = tx.objectStore(STORE_NAME);
+      const req = store.openCursor();
+      req.onsuccess = (e) => {
+        const cursor = (e.target as IDBRequest<IDBCursorWithValue>).result;
+        if (cursor) {
+          clipCount++;
+          if (cursor.value instanceof Blob) {
+            clipBytesEstimate += cursor.value.size;
+          }
+          cursor.continue();
+        } else {
+          resolve();
+        }
+      };
+      req.onerror = () => resolve();
+    });
+  } catch {
+    // ignore
+  }
+
+  const selectedModel = getTtsModelPreference();
+  const isModelCachedVal = await isAudioModelCached(selectedModel);
+
+  return {
+    clipCount,
+    clipBytesEstimate,
+    isModelCached: isModelCachedVal,
+    selectedModel,
+  };
+}
+
+/**
+ * Clear only the synthesized audio clips in IndexedDB.
+ * Frees up disk space while preserving downloaded neural model weights.
+ */
+export async function clearAudioClipsCache(): Promise<number> {
+  const db = await openAudioDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(STORE_NAME, 'readwrite');
+    const store = tx.objectStore(STORE_NAME);
+    const countReq = store.count();
+    countReq.onsuccess = () => {
+      const count = countReq.result;
+      const clearReq = store.clear();
+      clearReq.onsuccess = () => resolve(count);
+      clearReq.onerror = () => reject(clearReq.error);
+    };
+    countReq.onerror = () => reject(countReq.error);
+  });
+}
+
+/**
+ * Purge all audio caches: IndexedDB audio clips, CacheStorage ONNX model weights,
+ * and localStorage flags. Resets in-memory model instances completely.
+ */
+export async function clearAllAudioAndModelCaches(): Promise<{ clipsCleared: number; modelsCleared: boolean }> {
+  // 1. Clear IndexedDB clips
+  let clipsCleared = 0;
+  try {
+    clipsCleared = await clearAudioClipsCache();
+  } catch (e) {
+    console.warn('[IELTS Studio] Warning clearing audio clips:', e);
+  }
+
+  // 2. Clear CacheStorage
+  let modelsCleared = false;
+  if (typeof window !== 'undefined' && 'caches' in window) {
+    try {
+      const keys = await window.caches.keys();
+      for (const k of keys) {
+        if (k.includes('transformers') || k.includes('kokoro') || k.includes('onnx')) {
+          await window.caches.delete(k);
+          modelsCleared = true;
+        }
+      }
+    } catch (e) {
+      console.warn('[IELTS Studio] Warning clearing CacheStorage:', e);
+    }
+  }
+
+  // 3. Clear localStorage flags
+  if (typeof localStorage !== 'undefined') {
+    localStorage.removeItem('ielts_audio_model_cached_fp32');
+    localStorage.removeItem('ielts_audio_model_cached_q8');
+    localStorage.removeItem('ielts_audio_model_cached_q4');
+    localStorage.removeItem('ielts_audio_model_cached');
+  }
+
+  // 4. Invalidate memory instance
+  modelInstance = null;
+  downloadPromise = null;
+  loadedDtype = null;
+
+  notify({
+    status: 'not_downloaded',
+    progress: 0,
+    message: 'All audio and neural model caches purged.',
+  });
+
+  return { clipsCleared, modelsCleared };
+}

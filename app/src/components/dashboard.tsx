@@ -12,6 +12,8 @@ import { loadProviderConfig, type ProviderConfig } from '../lib/providers.ts';
 import { ieltsBandToCefr } from '../lib/bands.ts';
 import { AiConnectionModal, AiConnectionStatusPill } from './ai-connection.tsx';
 import { DeleteTestModal } from './delete-test-modal.tsx';
+import { TtsSettingsModal } from './tts-settings-modal.tsx';
+import { getTtsModelPreference, TTS_MODELS, type TtsModelType } from '../lib/audio-manager.ts';
 import { Button } from './ui/button.tsx';
 import type { Scope } from '../lib/types.ts';
 
@@ -90,6 +92,8 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
   const [selectedScope, setSelectedScope] = useState<Scope>('full');
   const [selectedPart, setSelectedPart] = useState<number>(1);
   const [showAiModal, setShowAiModal] = useState(false);
+  const [showTtsModal, setShowTtsModal] = useState(false);
+  const [currentTtsModel, setCurrentTtsModel] = useState<TtsModelType>(getTtsModelPreference);
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>(loadProviderConfig);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -257,8 +261,34 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
           </div>
         </div>
 
-        {/* AI Connection Status Pill Button */}
-        <AiConnectionStatusPill onClick={() => setShowAiModal(true)} config={providerConfig} />
+        <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+          <button
+            type="button"
+            onClick={() => setShowTtsModal(true)}
+            style={{
+              display: 'inline-flex',
+              alignItems: 'center',
+              gap: '6px',
+              padding: '6px 12px',
+              borderRadius: '9999px',
+              border: '1px solid #cbd5e1',
+              backgroundColor: '#f8fafc',
+              color: '#334155',
+              fontSize: '12px',
+              fontWeight: 600,
+              cursor: 'pointer',
+              transition: 'all 0.15s ease',
+            }}
+            title="Configure TTS Model and manage audio cache storage"
+          >
+            <span>🎙️</span>
+            <span>TTS: {TTS_MODELS[currentTtsModel]?.badge || 'Kokoro FP32'}</span>
+            <span style={{ fontSize: '10px', color: '#64748b' }}>⚙️</span>
+          </button>
+
+          {/* AI Connection Status Pill Button */}
+          <AiConnectionStatusPill onClick={() => setShowAiModal(true)} config={providerConfig} />
+        </div>
       </header>
 
       {/* AI Connection Modal */}
@@ -266,6 +296,13 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
         isOpen={showAiModal}
         onClose={() => setShowAiModal(false)}
         onConfigChanged={setProviderConfig}
+      />
+
+      {/* TTS Settings Modal */}
+      <TtsSettingsModal
+        isOpen={showTtsModal}
+        onClose={() => setShowTtsModal(false)}
+        onModelChanged={(m) => setCurrentTtsModel(m)}
       />
 
       {error && (
@@ -549,8 +586,8 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
             }}
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
-              {/* Contextual conversational listening shortcut */}
-              {(selectedScope === 'full' || selectedScope === 'listening') && (
+              {/* Contextual conversational listening shortcut - only offered for dedicated Listening practice */}
+              {selectedScope === 'listening' && (
                 <Button
                   variant="secondary"
                   size="md"
