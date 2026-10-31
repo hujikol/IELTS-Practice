@@ -3,6 +3,8 @@
 // and manages offline storage, IndexedDB audio caching, and cache clearing.
 
 import { voiceForPart, NARRATOR_VOICE, type VoiceMapEntry } from './voices.ts';
+import type { SpeakingPart } from './types.ts';
+import { filterAndPreparePart1Questions, cleanSpeakingQuestion } from './examiners.ts';
 
 const MODEL_ID = 'onnx-community/Kokoro-82M-v1.0-ONNX';
 const DB_NAME = 'ielts_studio_audio_db';
@@ -237,22 +239,67 @@ export async function isAudioModelCached(targetModel?: TtsModelType): Promise<bo
   if (typeof window === 'undefined') return false;
 
   const flagKey = storageFlagFor(modelId);
-  if (localStorage.getItem(flagKey) === 'true') {
-    return true;
-  }
+  const info = TTS_MODELS[modelId];
+  const targetDtype = info?.dtype || 'fp32';
 
-  // Check CacheStorage API
+  // 1. Check CacheStorage first if available to verify actual model asset presence
   if ('caches' in window) {
     try {
-      const keys = await window.caches.keys();
-      const hasTransformersCache = keys.some((k) => k.includes('transformers') || k.includes('kokoro'));
-      if (hasTransformersCache) {
-        localStorage.setItem(flagKey, 'true');
-        return true;
+      const cacheNames = await window.caches.keys();
+      const transformerCaches = cacheNames.filter(
+        (k) => k.includes('transformers') || k.includes('kokoro'),
+      );
+
+      if (transformerCaches.length > 0) {
+        let hasSpecificModelFile = false;
+        for (const cName of transformerCaches) {
+          const cache = await window.caches.open(cName);
+          const requests = await cache.keys();
+
+          const found = requests.some((req) => {
+            const url = req.url.toLowerCase();
+            if (!url.includes('kokoro') && !url.includes('onnx')) return false;
+
+            if (targetDtype === 'fp32') {
+              return (
+                (url.includes('model.onnx') || url.includes('model_fp32.onnx')) &&
+                !url.includes('fp16') &&
+                !url.includes('q8') &&
+                !url.includes('q4')
+              );
+            }
+
+            return url.includes(`model_${targetDtype}.onnx`);
+          });
+
+          if (found) {
+            hasSpecificModelFile = true;
+            break;
+          }
+        }
+
+        if (hasSpecificModelFile) {
+          if (typeof localStorage !== 'undefined') {
+            localStorage.setItem(flagKey, 'true');
+          }
+          return true;
+        } else {
+          // If CacheStorage is active and readable, but this specific model is absent,
+          // clear any stale/false localStorage flag so models are not falsely marked ready
+          if (typeof localStorage !== 'undefined') {
+            localStorage.removeItem(flagKey);
+          }
+          return false;
+        }
       }
     } catch {
-      // Ignore cache query errors
+      // Ignore cache query errors and fall back to localStorage check below
     }
+  }
+
+  // 2. Fallback to localStorage flag if CacheStorage API is unavailable (e.g. non-browser testing)
+  if (typeof localStorage !== 'undefined') {
+    return localStorage.getItem(flagKey) === 'true';
   }
 
   return false;
@@ -423,13 +470,129 @@ export type TestAudioCacheStatus = {
 };
 
 /**
+ * Extracts all speaking interviewer prompts for a test to ensure they can be
+ * pre-cached using the exact same neural Kokoro model as the listening section.
+ */
+export function getAllSpeakingPrompts(
+  speakingParts?: SpeakingPart[],
+  examinerGreeting?: string,
+): string[] {
+  const prompts: string[] = [];
+
+  // 1. Examiner Warmup Greeting
+  if (examinerGreeting && examinerGreeting.trim().length > 0) {
+    prompts.push(examinerGreeting.trim());
+  } else {
+    prompts.push(
+      'Good morning. My name is Dr. Richard Evans. Could you tell me your full name, please? And what shall I call you? Thank you. Can I check your identification, please?',
+    );
+  }
+
+  // 2. Part 1 Authentic Transition
+  prompts.push(
+    "Thank you, that's fine. Now, in this first part, I'd like to ask you some questions about yourself.",
+  );
+
+  // 3. Part 1 Questions (filtered to prevent repeating name/ID checks)
+  const p1 = speakingParts?.find((p) => p.part === 1);
+  const rawP1 =
+    p1?.questions && p1.questions.length > 0
+      ? p1.questions
+      : [
+          'Do you work or are you a student?',
+          'What do you enjoy most about your work or studies?',
+          'Where is your hometown located?',
+          'What do you like most about living in your area?',
+        ];
+  const p1Questions = filterAndPreparePart1Questions(rawP1);
+  p1Questions.forEach((q) => prompts.push(q));
+
+  // 4. Part 2 Transition and Cue Instructions
+  prompts.push(
+    "Now, I am going to give you a topic, and I'd like you to talk about it for one to two minutes. Before you talk, you'll have one minute to think about what you are going to say. You can make some notes if you wish. Here is your cue card.",
+  );
+  prompts.push(
+    "All right. Remember, you have one to two minutes for this, so don't worry if I stop you. Please start speaking now.",
+  );
+
+  // 5. Part 2 Round-off Questions
+  const p2 = speakingParts?.find((p) => p.part === 2);
+  const p2Questions = (
+    p2?.questions || ['Do you still make this journey?', 'Would you recommend this transport to others?']
+  )
+    .map(cleanSpeakingQuestion)
+    .filter((q) => q.length > 0);
+  p2Questions.forEach((q) => prompts.push(q));
+
+  // 6. Part 3 Intro & Discussion Questions
+  const p3 = speakingParts?.find((p) => p.part === 3);
+  if (p3?.prompt && p3.prompt.trim().length > 0) {
+    prompts.push(cleanSpeakingQuestion(p3.prompt));
+  } else {
+    prompts.push(
+      "We've been talking about travel and transport, and now I'd like to discuss broader related issues.",
+    );
+  }
+
+  const p3Questions = (
+    p3?.questions || [
+      'How has public transport changed in your country over recent decades?',
+      'Do you think governments should invest more in trains rather than building more roads?',
+      'What environmental problems are caused by the increase in private car ownership?',
+    ]
+  )
+    .map(cleanSpeakingQuestion)
+    .filter((q) => q.length > 0);
+  p3Questions.forEach((q) => prompts.push(q));
+
+  // 7. Conclusion
+  prompts.push('Thank you very much. That is the end of the speaking test.');
+
+  return prompts.filter((p) => p.trim().length > 0);
+}
+
+/**
+ * Pre-generate speech audio for speaking examiner questions and cache in IndexedDB.
+ * Eliminates interviewer audio delay, stutter, and choppiness during speaking exams.
+ */
+export async function pregenerateSpeakingAudio(
+  speakingParts: SpeakingPart[],
+  examinerVoiceId = 'bm_george',
+  onProgress?: (done: number, total: number, snippet: string) => void,
+  forcedModel?: TtsModelType,
+  examinerGreeting?: string,
+): Promise<void> {
+  const modelId = forcedModel || getTtsModelPreference();
+  if (modelId === 'webspeech') {
+    onProgress?.(1, 1, 'Web Speech API ready (no download)');
+    return;
+  }
+
+  const prompts = getAllSpeakingPrompts(speakingParts, examinerGreeting);
+  const total = prompts.length;
+
+  for (let i = 0; i < total; i++) {
+    const prompt = prompts[i]!;
+    onProgress?.(i + 1, total, prompt.slice(0, 30));
+    try {
+      await synthesizeSpeechAudio(prompt, examinerVoiceId, 1.0, modelId);
+    } catch (err) {
+      console.warn(`[IELTS Studio] Warning: Pre-rendering speaking examiner prompt ${i + 1} failed:`, err);
+    }
+  }
+}
+
+/**
  * Checks whether the neural model weights and generated audio clips for a test's
- * listening sections exist in the browser's local cache.
+ * listening AND speaking sections exist in the browser's local cache.
  */
 export async function checkTestAudioCacheStatus(
-  listeningBlocks: { script?: { speaker?: string; text?: string }[] }[],
+  listeningBlocks?: { script?: { speaker?: string; text?: string }[] }[],
   voiceMap?: Record<string, VoiceMapEntry>,
   forcedModel?: TtsModelType,
+  speakingParts?: SpeakingPart[],
+  examinerVoiceId?: string,
+  examinerGreeting?: string,
 ): Promise<TestAudioCacheStatus> {
   const modelType = forcedModel || getTtsModelPreference();
   if (modelType === 'webspeech') {
@@ -451,7 +614,9 @@ export async function checkTestAudioCacheStatus(
     (b) => Array.isArray(b?.script) && b.script.length > 0,
   );
 
-  if (validBlocks.length === 0) {
+  const hasSpeaking = Array.isArray(speakingParts) && speakingParts.length > 0;
+
+  if (validBlocks.length === 0 && !hasSpeaking) {
     return {
       isModelCached: isModelCachedVal,
       totalLines: 0,
@@ -463,6 +628,7 @@ export async function checkTestAudioCacheStatus(
 
   const vMap = voiceMap || {};
 
+  // Check listening clips
   for (let bIdx = 0; bIdx < validBlocks.length; bIdx++) {
     const block = validBlocks[bIdx]!;
     const partNum = bIdx + 1;
@@ -485,6 +651,20 @@ export async function checkTestAudioCacheStatus(
     }
   }
 
+  // Check speaking clips
+  if (hasSpeaking) {
+    const speakPrompts = getAllSpeakingPrompts(speakingParts, examinerGreeting);
+    const exVoice = examinerVoiceId || 'bm_george';
+    for (const prompt of speakPrompts) {
+      totalLines++;
+      const key = getAudioClipCacheKey(prompt, exVoice, 1.0, modelType);
+      const cached = await getCachedAudioBlob(key);
+      if (cached && cached.size > 0) {
+        cachedLines++;
+      }
+    }
+  }
+
   const missingVoices = !isModelCachedVal || (totalLines > 0 && cachedLines < totalLines);
 
   return {
@@ -498,13 +678,16 @@ export async function checkTestAudioCacheStatus(
 
 /**
  * Downloads the neural model weights and re-synthesizes all listening audio tracks
- * for an entire test, with live progress reporting across both stages.
+ * and speaking examiner prompts for an entire test, with live progress reporting across stages.
  */
 export async function downloadAndRegenerateAllVoices(
   listeningBlocks: { script?: { speaker?: string; text?: string }[] }[],
   voiceMap: Record<string, VoiceMapEntry>,
   onProgress?: (stage: 'downloading' | 'synthesizing', progress: number, message: string) => void,
   forcedModel?: TtsModelType,
+  speakingParts?: SpeakingPart[],
+  examinerVoiceId?: string,
+  examinerGreeting?: string,
 ): Promise<void> {
   const modelType = forcedModel || getTtsModelPreference();
   if (modelType === 'webspeech') {
@@ -520,7 +703,7 @@ export async function downloadAndRegenerateAllVoices(
     onProgress?.('downloading', pct, msg);
   }, modelType);
 
-  // Step 2: Regenerate audio clips
+  // Step 2: Calculate total lines for accurate progress bar
   const validBlocks = (listeningBlocks || []).filter(
     (b) => Array.isArray(b?.script) && b.script.length > 0,
   );
@@ -530,8 +713,16 @@ export async function downloadAndRegenerateAllVoices(
     totalLines += (b.script || []).filter((s) => s && s.text && s.text.trim().length > 0).length;
   });
 
+  const speakPrompts =
+    Array.isArray(speakingParts) && speakingParts.length > 0
+      ? getAllSpeakingPrompts(speakingParts, examinerGreeting)
+      : [];
+
+  totalLines += speakPrompts.length;
+
   let processed = 0;
 
+  // Step 3: Regenerate listening audio clips
   for (let bIdx = 0; bIdx < validBlocks.length; bIdx++) {
     const block = validBlocks[bIdx]!;
     const partNum = bIdx + 1;
@@ -549,14 +740,34 @@ export async function downloadAndRegenerateAllVoices(
         onProgress?.(
           'synthesizing',
           pct,
-          `Part ${partNum} (${done}/${cleanScript.length}): "${snippet.slice(0, 24)}..."`,
+          `Listening Part ${partNum} (${done}/${cleanScript.length}): "${snippet.slice(0, 24)}..."`,
         );
       },
       modelType,
     );
   }
 
-  onProgress?.('synthesizing', 100, 'All listening voice tracks synthesized and cached offline!');
+  // Step 4: Regenerate speaking examiner clips
+  if (speakPrompts.length > 0 && speakingParts) {
+    const exVoice = examinerVoiceId || 'bm_george';
+    await pregenerateSpeakingAudio(
+      speakingParts,
+      exVoice,
+      (done, _total, snippet) => {
+        processed++;
+        const pct = totalLines > 0 ? Math.round((processed / totalLines) * 100) : 100;
+        onProgress?.(
+          'synthesizing',
+          pct,
+          `Speaking Examiner (${done}/${speakPrompts.length}): "${snippet.slice(0, 24)}..."`,
+        );
+      },
+      modelType,
+      examinerGreeting,
+    );
+  }
+
+  onProgress?.('synthesizing', 100, 'All listening and speaking voice tracks synthesized and cached offline!');
 }
 
 /**

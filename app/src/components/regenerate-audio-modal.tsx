@@ -5,9 +5,11 @@ import {
   getTtsModelPreference,
   setTtsModelPreference,
   downloadAndRegenerateAllVoices,
+  isAudioModelCached,
   type TtsModelType,
 } from '../lib/audio-manager.ts';
 import type { VoiceMapEntry } from '../lib/voices.ts';
+import type { SpeakingPart } from '../lib/types.ts';
 
 export interface RegenerateAudioModalProps {
   isOpen: boolean;
@@ -18,6 +20,9 @@ export interface RegenerateAudioModalProps {
   cachedLines: number;
   totalLines: number;
   isModelCached: boolean;
+  speakingParts?: SpeakingPart[];
+  examinerVoiceId?: string;
+  examinerGreeting?: string;
 }
 
 /**
@@ -35,11 +40,15 @@ export function RegenerateAudioModal({
   cachedLines,
   totalLines,
   isModelCached,
+  speakingParts,
+  examinerVoiceId,
+  examinerGreeting,
 }: RegenerateAudioModalProps) {
   const modalRef = useRef<HTMLDivElement | null>(null);
   const actionBtnRef = useRef<HTMLButtonElement | null>(null);
 
   const [selectedModel, setSelectedModel] = useState<TtsModelType>(getTtsModelPreference);
+  const [modelCachedState, setModelCachedState] = useState<boolean>(isModelCached);
   const [isGenerating, setIsGenerating] = useState(false);
   const [stage, setStage] = useState<'idle' | 'downloading' | 'synthesizing' | 'done' | 'error'>('idle');
   const [progressPercent, setProgressPercent] = useState<number>(0);
@@ -47,8 +56,24 @@ export function RegenerateAudioModal({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
   useEffect(() => {
+    let cancelled = false;
+    const checkCache = async () => {
+      const cached = await isAudioModelCached(selectedModel);
+      if (!cancelled) {
+        setModelCachedState(cached);
+      }
+    };
+    void checkCache();
+    return () => {
+      cancelled = true;
+    };
+  }, [selectedModel, isOpen]);
+
+  useEffect(() => {
     if (isOpen) {
-      setSelectedModel(getTtsModelPreference());
+      const current = getTtsModelPreference();
+      setSelectedModel(current);
+      void isAudioModelCached(current).then((cached) => setModelCachedState(cached));
       setStage('idle');
       setProgressPercent(0);
       setProgressMessage('');
@@ -103,6 +128,9 @@ export function RegenerateAudioModal({
           setProgressMessage(message);
         },
         selectedModel,
+        speakingParts,
+        examinerVoiceId,
+        examinerGreeting,
       );
 
       setStage('done');
@@ -233,8 +261,9 @@ export function RegenerateAudioModal({
             lineHeight: 1.5,
           }}
         >
-          You are starting a test with listening audio, but the neural voice audio clips or model weights were deleted or cleared from your browser cache.
-          Download the model and generate the audio clips now to ensure smooth playback during your practice exam.
+          {modelCachedState
+            ? 'The voice model is ready on your device. Synthesize the missing audio tracks now to ensure smooth playback during your practice exam.'
+            : 'You are starting a test with listening audio, but the neural voice audio clips or model weights were deleted or cleared from your browser cache. Download the model and generate the audio clips now to ensure smooth playback during your practice exam.'}
         </p>
 
         {/* Missing Cache Diagnostic Card */}
@@ -253,8 +282,8 @@ export function RegenerateAudioModal({
         >
           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
             <span style={{ color: '#64748b', fontWeight: 600 }}>Neural TTS Model:</span>
-            <span style={{ fontWeight: 700, color: isModelCached ? '#15803d' : '#b45309' }}>
-              {isModelCached ? '✓ Cached in Browser' : '❌ Missing from Cache (Needs Download)'}
+            <span style={{ fontWeight: 700, color: modelCachedState ? '#15803d' : '#b45309' }}>
+              {modelCachedState ? '✓ Cached in Browser' : '❌ Missing from Cache (Needs Download)'}
             </span>
           </div>
 
@@ -273,7 +302,7 @@ export function RegenerateAudioModal({
               htmlFor="regen-model-select"
               style={{ display: 'block', fontSize: '12px', fontWeight: 700, color: '#334155', marginBottom: '6px' }}
             >
-              Choose Neural TTS Model to Download &amp; Use:
+              {modelCachedState ? 'Active Neural TTS Model:' : 'Choose Neural TTS Model to Download & Use:'}
             </label>
             <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '8px' }}>
               {modelKeys.map((key) => {
@@ -389,7 +418,9 @@ export function RegenerateAudioModal({
           >
             {isGenerating
               ? 'Synthesizing Voices...'
-              : `Download Model & Generate Voices (${currentInfo.downloadSize}) →`}
+              : modelCachedState
+                ? 'Generate Voices →'
+                : `Download Model & Generate Voices (${currentInfo.downloadSize}) →`}
           </Button>
 
           {!isGenerating && (

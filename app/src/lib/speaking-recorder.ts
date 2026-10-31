@@ -359,57 +359,144 @@ export function startLiveSpeechRecognition(
   };
 }
 
+// Module-level single-flight speech tracker to prevent any overlapping speech or choppy audio
+let globalExaminerSpeechCancel: (() => void) | null = null;
+
+/** Stop any currently playing examiner speech immediately (both Audio and SpeechSynthesis) */
+export function stopAnyActiveExaminerSpeech(): void {
+  if (globalExaminerSpeechCancel) {
+    globalExaminerSpeechCancel();
+    globalExaminerSpeechCancel = null;
+  }
+}
+
 /**
- * Speaks an examiner question aloud.
- * First attempts neural Kokoro TTS; falls back gracefully to Web Speech API `speechSynthesis`.
+ * Speaks an examiner question aloud with direct, high-fidelity playback.
+ * First checks local IndexedDB neural audio cache (synthesized with the user's chosen TTS model
+ * such as Kokoro FP32/FP16/Q8). If cached, starts playback with 0ms delay.
+ * If not cached, synthesizes on-device neural audio, falling back gracefully to Web Speech API
+ * only if neural synthesis is unavailable.
  */
 export async function speakExaminerQuestion(
   text: string,
   onStart?: () => void,
   onEnd?: () => void,
+  voiceId = 'bm_george',
 ): Promise<{ cancel: () => void }> {
+  // Cancel any prior active utterance or audio element immediately to prevent overlap/stutter
+  stopAnyActiveExaminerSpeech();
+
+  const clean = text.trim();
+  if (!clean) {
+    onEnd?.();
+    return { cancel: () => {} };
+  }
+
   let isCancelled = false;
   let currentAudioElem: HTMLAudioElement | null = null;
+  let currentBlobUrl: string | null = null;
 
   const cancel = () => {
     isCancelled = true;
     if (currentAudioElem) {
-      currentAudioElem.pause();
-      currentAudioElem.src = '';
+      try {
+        currentAudioElem.pause();
+        currentAudioElem.currentTime = 0;
+        currentAudioElem.src = '';
+      } catch {
+        // ignore audio cancel error
+      }
+      currentAudioElem = null;
+    }
+    if (currentBlobUrl) {
+      URL.revokeObjectURL(currentBlobUrl);
+      currentBlobUrl = null;
     }
     if (typeof window !== 'undefined' && 'speechSynthesis' in window) {
-      window.speechSynthesis.cancel();
+      try {
+        window.speechSynthesis.cancel();
+      } catch {
+        // ignore
+      }
+    }
+    if (globalExaminerSpeechCancel === cancel) {
+      globalExaminerSpeechCancel = null;
     }
   };
 
-  // Try Kokoro TTS first
+  globalExaminerSpeechCancel = cancel;
+
+  // 1. Try neural Kokoro TTS (instant if pre-cached in IndexedDB)
   try {
-    const blob = await synthesizeSpeechAudio(text, 'bm_george', 1.0);
-    if (!isCancelled && blob && blob.size > 0) {
+    const blob = await synthesizeSpeechAudio(clean, voiceId, 1.0);
+    if (isCancelled) return { cancel };
+
+    if (blob && blob.size > 0) {
       const url = URL.createObjectURL(blob);
+      currentBlobUrl = url;
       const audio = new Audio(url);
       currentAudioElem = audio;
 
-      audio.onplay = () => onStart?.();
-      audio.onended = () => {
-        URL.revokeObjectURL(url);
-        onEnd?.();
-      };
-      audio.onerror = () => {
-        URL.revokeObjectURL(url);
-        // Fallback to Web Speech API
-        speakWithBrowserTts(text, onStart, onEnd);
+      let hasStarted = false;
+      let hasEnded = false;
+
+      const triggerStart = () => {
+        if (!hasStarted && !isCancelled) {
+          hasStarted = true;
+          onStart?.();
+        }
       };
 
-      await audio.play();
+      const triggerEnd = () => {
+        if (!hasEnded) {
+          hasEnded = true;
+          if (currentBlobUrl) {
+            URL.revokeObjectURL(currentBlobUrl);
+            currentBlobUrl = null;
+          }
+          currentAudioElem = null;
+          if (globalExaminerSpeechCancel === cancel) {
+            globalExaminerSpeechCancel = null;
+          }
+          if (!isCancelled) {
+            onEnd?.();
+          }
+        }
+      };
+
+      audio.onplay = triggerStart;
+      audio.onended = triggerEnd;
+      audio.onerror = () => {
+        if (currentBlobUrl) {
+          URL.revokeObjectURL(currentBlobUrl);
+          currentBlobUrl = null;
+        }
+        currentAudioElem = null;
+        if (!isCancelled && !hasEnded) {
+          speakWithBrowserTts(clean, onStart, onEnd);
+        }
+      };
+
+      try {
+        await audio.play();
+        triggerStart();
+      } catch (playErr) {
+        // If play() was aborted by cancel() or browser interaction policy
+        if (isCancelled) return { cancel };
+        console.warn('[IELTS Studio] Audio play interrupted, using browser TTS fallback:', playErr);
+        speakWithBrowserTts(clean, onStart, onEnd);
+      }
+
       return { cancel };
     }
-  } catch {
-    // Kokoro TTS model not ready or unavailable — use browser SpeechSynthesis
+  } catch (err) {
+    if (isCancelled) return { cancel };
+    console.warn('[IELTS Studio] Neural speech synthesis note:', err);
   }
 
+  // 2. Fallback to Web Speech API if neural audio was unavailable and not cancelled
   if (!isCancelled) {
-    speakWithBrowserTts(text, onStart, onEnd);
+    speakWithBrowserTts(clean, onStart, onEnd);
   }
 
   return { cancel };
@@ -421,23 +508,54 @@ function speakWithBrowserTts(text: string, onStart?: () => void, onEnd?: () => v
     return;
   }
 
-  window.speechSynthesis.cancel();
-  const utterance = new SpeechSynthesisUtterance(text);
-  utterance.rate = 0.95; // Natural measured IELTS examiner speaking cadence
-  utterance.pitch = 1.0;
-  utterance.lang = 'en-GB';
+  try {
+    window.speechSynthesis.cancel();
+    const utterance = new SpeechSynthesisUtterance(text);
+    utterance.rate = 0.95; // Natural measured IELTS examiner speaking cadence
+    utterance.pitch = 1.0;
+    utterance.lang = 'en-GB';
 
-  // Attempt to select a British or English voice if available
-  const voices = window.speechSynthesis.getVoices();
-  const britishVoice = voices.find((v) => v.lang.includes('en-GB') || v.name.includes('UK') || v.name.includes('British'));
-  if (britishVoice) {
-    utterance.voice = britishVoice;
+    // Select British or English voice if available
+    const voices = window.speechSynthesis.getVoices();
+    const britishVoice = voices.find(
+      (v) => v.lang.includes('en-GB') || v.name.includes('UK') || v.name.includes('British'),
+    );
+    if (britishVoice) {
+      utterance.voice = britishVoice;
+    }
+
+    let started = false;
+    let ended = false;
+
+    utterance.onstart = () => {
+      if (!started) {
+        started = true;
+        onStart?.();
+      }
+    };
+
+    utterance.onend = () => {
+      if (!ended) {
+        ended = true;
+        onEnd?.();
+      }
+    };
+
+    utterance.onerror = (e) => {
+      // Ignore 'interrupted' or 'canceled' errors from normal user navigation
+      if (!ended) {
+        ended = true;
+        if (e.error !== 'interrupted' && e.error !== 'canceled') {
+          console.warn('[IELTS Studio] Web Speech error:', e.error);
+        }
+        onEnd?.();
+      }
+    };
+
+    window.speechSynthesis.speak(utterance);
+  } catch (err) {
+    console.warn('[IELTS Studio] Web Speech API speak failed:', err);
+    onEnd?.();
   }
-
-  utterance.onstart = () => onStart?.();
-  utterance.onend = () => onEnd?.();
-  utterance.onerror = () => onEnd?.();
-
-  window.speechSynthesis.speak(utterance);
 }
 

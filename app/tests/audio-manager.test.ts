@@ -128,4 +128,18 @@ test('getTtsDevicePreference defaults to webgpu and setTtsDevicePreference toggl
   assert.equal(getTtsDevicePreference(), 'webgpu', 'Should toggle back to webgpu compute');
 });
 
+test('isAudioModelCached only marks the specific downloaded model as cached, keeping other models un-downloaded', async () => {
+  // Set flag for fp32 only
+  if (typeof localStorage !== 'undefined') {
+    localStorage.setItem('ielts_audio_model_cached_fp32', 'true');
+    localStorage.removeItem('ielts_audio_model_cached_fp16');
+    localStorage.removeItem('ielts_audio_model_cached_q8');
+
+    assert.equal(await isAudioModelCached('kokoro-fp32'), true, 'FP32 should be cached');
+    assert.equal(await isAudioModelCached('kokoro-fp16'), false, 'FP16 should NOT be cached');
+    assert.equal(await isAudioModelCached('kokoro-q8'), false, 'Q8 should NOT be cached');
+    assert.equal(await isAudioModelCached('webspeech'), true, 'WebSpeech is always available');
+  }
+});
+
 

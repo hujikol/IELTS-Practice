@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef, useCallback } from 'react';
+import { useState, useEffect, useRef, useCallback, useMemo } from 'react';
 import type { SpeakingPart, SpeakingMode, Recording } from '../lib/types.ts';
 import {
   isAudioRecordingSupported,
@@ -9,6 +9,12 @@ import {
   startLiveSpeechRecognition,
   speakExaminerQuestion,
 } from '../lib/speaking-recorder.ts';
+import {
+  getExaminerForAttempt,
+  getRandomExaminerGreeting,
+  filterAndPreparePart1Questions,
+  cleanSpeakingQuestion,
+} from '../lib/examiners.ts';
 import { Button } from './ui/button.tsx';
 
 interface SpeakingSectionProps {
@@ -122,12 +128,17 @@ export function SpeakingSection({
     ],
   };
 
-  // Clean prompt text removing "Examiner:" prefixes
-  const cleanText = (t: string) =>
-    (t || '')
-      .replace(/^(Examiner|Candidate):\s*/i, '')
-      .replace(/\(Ask the questions? below:?\)/gi, '')
-      .trim();
+  // Examiner Profile (randomized by attempt seed, matching authentic Cambridge Examiners)
+  const examiner = useMemo(() => getExaminerForAttempt(attemptId), [attemptId]);
+  const [examinerGreeting] = useState(() => getRandomExaminerGreeting(examiner, attemptId));
+
+  // Filtered and de-duplicated Part 1 questions (never repeating candidate identity or warmup)
+  const filteredPart1Questions = useMemo(() => {
+    return filterAndPreparePart1Questions(part1Data.questions || []);
+  }, [part1Data.questions]);
+
+  // Clean prompt text removing "Examiner:" prefixes and notes
+  const cleanText = (t: string) => cleanSpeakingQuestion(t);
 
   // Stop any active examiner speech
   const stopExaminerAudio = useCallback(() => {
@@ -230,11 +241,12 @@ export function SpeakingSection({
             startLearnerRecording(questionKey, onSpeechDone);
           }, 500);
         },
+        examiner.voiceId,
       );
 
       examinerSpeechCancelRef.current = controller.cancel;
     },
-    [stopExaminerAudio],
+    [stopExaminerAudio, examiner.voiceId],
   );
 
   // Start recording the candidate's answer
@@ -333,17 +345,15 @@ export function SpeakingSection({
   // Intro Step
   const startIntro = () => {
     setStep('intro');
-    const introText =
-      'Good morning. My name is Dr. Evans. Could you tell me your full name, please? And what shall I call you? Can I check your identification?';
-    void playQuestionAndListen(introText, 'intro');
+    void playQuestionAndListen(examinerGreeting, 'intro');
   };
 
   // Part 1 Step
   const startPart1 = () => {
     setStep('part1');
     setPart1Index(0);
-    const q1 = part1Data.questions?.[0] || 'Do you work or are you a student?';
-    const text = cleanText(q1);
+    const q1 = filteredPart1Questions[0] || 'Do you work or are you a student?';
+    const text = `Thank you, that's fine. Now, in this first part, I'd like to ask you some questions about yourself. ${cleanText(q1)}`;
     void playQuestionAndListen(text, `p1_q0`);
   };
 
@@ -353,10 +363,9 @@ export function SpeakingSection({
     if (transcript) allTranscriptsListRef.current.push(transcript);
 
     const nextIdx = part1Index + 1;
-    const questions = part1Data.questions || [];
-    if (nextIdx < questions.length) {
+    if (nextIdx < filteredPart1Questions.length) {
       setPart1Index(nextIdx);
-      const text = cleanText(questions[nextIdx]!);
+      const text = cleanText(filteredPart1Questions[nextIdx]!);
       void playQuestionAndListen(text, `p1_q${nextIdx}`);
     } else {
       // Transition to Part 2 Intro
@@ -887,29 +896,35 @@ export function SpeakingSection({
             </div>
 
             <div style={{ flex: 1 }}>
-              <span style={{ fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', color: isExaminerSpeaking ? '#1d4ed8' : isRecording ? '#15803d' : '#64748b' }}>
-                {isExaminerSpeaking ? 'Examiner is Speaking...' : isRecording ? 'Your Turn — Speak Now' : 'Ready'}
-              </span>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 2 }}>
+                <span style={{ fontSize: '0.75rem', fontWeight: 800, textTransform: 'uppercase', color: isExaminerSpeaking ? '#1d4ed8' : isRecording ? '#15803d' : '#64748b' }}>
+                  {isExaminerSpeaking ? 'Examiner Speaking' : isRecording ? 'Your Turn — Speak Now' : 'Examiner Ready'}
+                </span>
+                <span style={{ fontSize: '0.72rem', color: '#94a3b8' }}>•</span>
+                <span style={{ fontSize: '0.72rem', color: '#475569', fontWeight: 600 }}>{examiner.name} ({examiner.title})</span>
+              </div>
 
               {/* In Practice Mode or Part 2: Show question text */}
               {(mode === 'practice' || step === 'part2-prep' || step === 'part2-speak') && (
                 <div style={{ fontSize: '1rem', fontWeight: 600, color: '#0f172a', marginTop: 4 }}>
-                  {step === 'part1'
-                    ? cleanText(part1Data.questions?.[part1Index] || '')
-                    : step === 'part2-prep' || step === 'part2-speak'
-                      ? cleanText(part2Data.prompt)
-                      : step === 'part2-roundoff'
-                        ? cleanText(part2Data.questions?.[part2RoundoffIndex] || '')
-                        : step === 'part3'
-                          ? cleanText(part3Data.questions?.[part3Index] || '')
-                          : 'Please listen to the examiner.'}
+                  {step === 'intro'
+                    ? examinerGreeting
+                    : step === 'part1'
+                      ? cleanText(filteredPart1Questions[part1Index] || '')
+                      : step === 'part2-prep' || step === 'part2-speak'
+                        ? cleanText(part2Data.prompt)
+                        : step === 'part2-roundoff'
+                          ? cleanText(part2Data.questions?.[part2RoundoffIndex] || '')
+                          : step === 'part3'
+                            ? cleanText(part3Data.questions?.[part3Index] || '')
+                            : 'Please listen to the examiner.'}
                 </div>
               )}
 
               {/* In Exam Mode: Keep question text hidden per spec §3 */}
               {mode === 'exam' && step !== 'part2-prep' && step !== 'part2-speak' && (
                 <div style={{ fontSize: '0.88rem', color: '#64748b', fontStyle: 'italic', marginTop: 4 }}>
-                  [Exam Mode: Audio Question Active] Listen carefully to the examiner&apos;s question.
+                  [Exam Mode: Audio Active] Listen carefully to {examiner.name}&apos;s question.
                 </div>
               )}
             </div>
@@ -923,11 +938,15 @@ export function SpeakingSection({
                   icon="↺"
                   onClick={() => {
                     const text =
-                      step === 'part1'
-                        ? cleanText(part1Data.questions?.[part1Index] || '')
-                        : step === 'part3'
-                          ? cleanText(part3Data.questions?.[part3Index] || '')
-                          : '';
+                      step === 'intro'
+                        ? examinerGreeting
+                        : step === 'part1'
+                          ? cleanText(filteredPart1Questions[part1Index] || '')
+                          : step === 'part2-roundoff'
+                            ? cleanText(part2Data.questions?.[part2RoundoffIndex] || '')
+                            : step === 'part3'
+                              ? cleanText(part3Data.questions?.[part3Index] || '')
+                              : '';
                     if (text) handleRepeatQuestion(text, `repeat_${Date.now()}`);
                   }}
                 >
@@ -939,15 +958,30 @@ export function SpeakingSection({
                   size="sm"
                   icon="↺"
                   onClick={() => {
-                    const qKey = step === 'part1' ? `p1_q${part1Index}` : `p3_q${part3Index}`;
+                    const qKey =
+                      step === 'intro'
+                        ? 'intro'
+                        : step === 'part1'
+                          ? `p1_q${part1Index}`
+                          : `p3_q${part3Index}`;
                     const text =
-                      step === 'part1'
-                        ? cleanText(part1Data.questions?.[part1Index] || '')
-                        : cleanText(part3Data.questions?.[part3Index] || '');
+                      step === 'intro'
+                        ? examinerGreeting
+                        : step === 'part1'
+                          ? cleanText(filteredPart1Questions[part1Index] || '')
+                          : cleanText(part3Data.questions?.[part3Index] || '');
                     handleRepeatQuestion(text, qKey);
                   }}
-                  disabled={(repeatsUsed[step === 'part1' ? `p1_q${part1Index}` : `p3_q${part3Index}`] || 0) >= 1}
-                  title="Official candidate repeat request (1 allowed)"
+                  disabled={
+                    (repeatsUsed[
+                      step === 'intro'
+                        ? 'intro'
+                        : step === 'part1'
+                          ? `p1_q${part1Index}`
+                          : `p3_q${part3Index}`
+                    ] || 0) >= 1
+                  }
+                  title="Official candidate repeat request (1 allowed in exam mode)"
                 >
                   Could you repeat that?
                 </Button>

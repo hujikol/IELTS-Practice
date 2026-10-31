@@ -3,6 +3,8 @@ import {
   listAttempts,
   createAttempt,
   deleteAttempt,
+  loadAttempt,
+  writeRecord,
   type AttemptSummary,
   type AttemptRecord,
 } from '../lib/attempts.ts';
@@ -13,9 +15,17 @@ import { ieltsBandToCefr } from '../lib/bands.ts';
 import { AiConnectionModal, AiConnectionStatusPill } from './ai-connection.tsx';
 import { DeleteTestModal } from './delete-test-modal.tsx';
 import { TtsSettingsModal } from './tts-settings-modal.tsx';
-import { getTtsModelPreference, TTS_MODELS, type TtsModelType } from '../lib/audio-manager.ts';
+import { RegenerateAudioModal } from './regenerate-audio-modal.tsx';
+import {
+  getTtsModelPreference,
+  checkTestAudioCacheStatus,
+  TTS_MODELS,
+  type TtsModelType,
+} from '../lib/audio-manager.ts';
+import { randomizeVoiceMap, type VoiceMapEntry } from '../lib/voices.ts';
+import { getExaminerForAttempt, getRandomExaminerGreeting } from '../lib/examiners.ts';
 import { Button } from './ui/button.tsx';
-import type { Scope } from '../lib/types.ts';
+import type { Scope, SpeakingPart } from '../lib/types.ts';
 
 function formatLastUpdated(timestamp: number | undefined | null): string {
   if (!timestamp || typeof timestamp !== 'number' || isNaN(timestamp)) {
@@ -134,11 +144,98 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
     }
   };
 
+  const [regenModalState, setRegenModalState] = useState<{
+    isOpen: boolean;
+    targetAttemptId: string | null;
+    listeningBlocks: { script?: { speaker?: string; text?: string }[] }[];
+    voiceMap: Record<string, VoiceMapEntry>;
+    cachedLines: number;
+    totalLines: number;
+    isModelCached: boolean;
+    speakingParts?: SpeakingPart[];
+    examinerVoiceId?: string;
+    examinerGreeting?: string;
+  }>({
+    isOpen: false,
+    targetAttemptId: null,
+    listeningBlocks: [],
+    voiceMap: {},
+    cachedLines: 0,
+    totalLines: 0,
+    isModelCached: true,
+  });
+
+  const handleOpenAttemptWithCheck = async (attemptId: string) => {
+    try {
+      const attempt = await loadAttempt(attemptId);
+      // If completed or preparing, directly open
+      if (attempt.status === 'completed' || attempt.status === 'preparing') {
+        onOpenAttempt(attemptId);
+        return;
+      }
+
+      // Check if this attempt has listening or speaking material that requires neural audio
+      const listeningBlocks = attempt.data?.listening || [];
+      const speakingParts = attempt.data?.speaking || [];
+      const hasListeningScript = listeningBlocks.some(
+        (b) => Array.isArray(b?.script) && b.script.length > 0,
+      );
+      const hasSpeaking = speakingParts.length > 0;
+
+      if (hasListeningScript || hasSpeaking) {
+        const vMap = attempt.voice_map || randomizeVoiceMap();
+        if (!attempt.voice_map) {
+          attempt.voice_map = vMap;
+          writeRecord(attempt);
+        }
+
+        const examiner = getExaminerForAttempt(attemptId);
+        const examinerGreeting = getRandomExaminerGreeting(examiner, attemptId);
+
+        const cacheStatus = await checkTestAudioCacheStatus(
+          listeningBlocks,
+          vMap,
+          undefined,
+          speakingParts,
+          examiner.voiceId,
+          examinerGreeting,
+        );
+        if (cacheStatus.missingVoices) {
+          setRegenModalState({
+            isOpen: true,
+            targetAttemptId: attemptId,
+            listeningBlocks,
+            voiceMap: vMap,
+            cachedLines: cacheStatus.cachedLines,
+            totalLines: cacheStatus.totalLines,
+            isModelCached: cacheStatus.isModelCached,
+            speakingParts,
+            examinerVoiceId: examiner.voiceId,
+            examinerGreeting,
+          });
+          return;
+        }
+      }
+
+      onOpenAttempt(attemptId);
+    } catch {
+      onOpenAttempt(attemptId);
+    }
+  };
+
+  const handleRegenModalComplete = () => {
+    const targetId = regenModalState.targetAttemptId;
+    setRegenModalState((prev) => ({ ...prev, isOpen: false }));
+    if (targetId) {
+      onOpenAttempt(targetId);
+    }
+  };
+
   const handleLaunchConversationalListening = async () => {
     setBusy(true);
     try {
       const att = await createConversationalListeningAttempt(selectedMode);
-      onOpenAttempt(att.id);
+      await handleOpenAttemptWithCheck(att.id);
     } catch (e) {
       setError((e as Error).message || 'Failed to start conversational listening practice.');
     } finally {
@@ -628,7 +725,7 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                 return (
                   <article
                     key={t.id}
-                    onClick={() => onOpenAttempt(t.id)}
+                    onClick={() => void handleOpenAttemptWithCheck(t.id)}
                     style={{
                       background: '#ffffff',
                       border: '1px solid #e2e8f0',
@@ -678,7 +775,7 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                         icon={t.status === 'active' || isComplete ? '▶' : '📋'}
                         onClick={(e) => {
                           e.stopPropagation();
-                          onOpenAttempt(t.id);
+                          void handleOpenAttemptWithCheck(t.id);
                         }}
                       >
                         {t.status === 'active' ? 'Resume Test →' : isComplete ? 'Start Test →' : 'Continue Preparation →'}
@@ -742,7 +839,7 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                 return (
                   <article
                     key={t.id}
-                    onClick={() => onOpenAttempt(t.id)}
+                    onClick={() => void handleOpenAttemptWithCheck(t.id)}
                     style={{
                       background: '#ffffff',
                       border: '1px solid #e2e8f0',
@@ -921,6 +1018,21 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
         }}
         onConfirm={handleConfirmDelete}
         loading={isDeleting}
+      />
+
+      {/* Missing Audio Cache & Regeneration Modal */}
+      <RegenerateAudioModal
+        isOpen={regenModalState.isOpen}
+        onClose={() => setRegenModalState((prev) => ({ ...prev, isOpen: false }))}
+        onComplete={handleRegenModalComplete}
+        listeningBlocks={regenModalState.listeningBlocks}
+        voiceMap={regenModalState.voiceMap}
+        cachedLines={regenModalState.cachedLines}
+        totalLines={regenModalState.totalLines}
+        isModelCached={regenModalState.isModelCached}
+        speakingParts={regenModalState.speakingParts}
+        examinerVoiceId={regenModalState.examinerVoiceId}
+        examinerGreeting={regenModalState.examinerGreeting}
       />
     </div>
   );

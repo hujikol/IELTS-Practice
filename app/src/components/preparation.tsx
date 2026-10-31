@@ -21,16 +21,18 @@ import { applyMaterial } from '../lib/material.ts';
 import { CONVERSATIONAL_LISTENING_BLOCK } from '../lib/sample-material.ts';
 import {
   pregenerateListeningAudio,
+  pregenerateSpeakingAudio,
   getTtsModelPreference,
   checkTestAudioCacheStatus,
   TTS_MODELS,
   type TtsModelType,
 } from '../lib/audio-manager.ts';
 import { randomizeVoiceMap } from '../lib/voices.ts';
+import { getExaminerForAttempt, getRandomExaminerGreeting } from '../lib/examiners.ts';
 import { TtsSettingsModal } from './tts-settings-modal.tsx';
 import { RegenerateAudioModal } from './regenerate-audio-modal.tsx';
 import { Button } from './ui/button.tsx';
-import type { ErrorCode, PrepJob, Scope, TestData } from '../lib/types.ts';
+import type { ErrorCode, PrepJob, Scope, TestData, SpeakingPart } from '../lib/types.ts';
 
 const SCOPES: { value: Scope; label: string; part: number }[] = [
   { value: 'full', label: 'Full Mock Test (All 4 Modules)', part: 0 },
@@ -149,6 +151,9 @@ export function Preparation({
     cachedLines: number;
     totalLines: number;
     isModelCached: boolean;
+    speakingParts?: SpeakingPart[];
+    examinerVoiceId?: string;
+    examinerGreeting?: string;
   }>({
     isOpen: false,
     cachedLines: 0,
@@ -460,6 +465,37 @@ export function Preparation({
         }
       }
 
+      // Synthesize Speaking Examiner Audio Tracks with chosen neural TTS model
+      const speakingParts = currentRecord.data.speaking || [];
+      const hasSpeaking = speakingParts.length > 0;
+      if (hasSpeaking) {
+        setActivePipelineJobKey('local-voice-synthesis-speaking');
+        const examiner = getExaminerForAttempt(currentRecord.id);
+        const examinerGreeting = getRandomExaminerGreeting(examiner, currentRecord.id);
+        const activeModel = getTtsModelPreference();
+        const modelLabel = TTS_MODELS[activeModel]?.badge || 'Neural audio';
+
+        setPipelineStepMessage(
+          `[Final Stage] Synthesizing examiner voice (${examiner.name} • ${modelLabel}) for Speaking Section...`,
+        );
+
+        try {
+          await pregenerateSpeakingAudio(
+            speakingParts,
+            examiner.voiceId,
+            (done, total, snippet) => {
+              setPipelineStepMessage(
+                `[Final Stage] Synthesizing Speaking Examiner (${done}/${total}): "${snippet.slice(0, 24)}..."`,
+              );
+            },
+            activeModel,
+            examinerGreeting,
+          );
+        } catch (spkAudioErr) {
+          console.warn('[IELTS Studio] Non-fatal speaking audio pregeneration notice:', spkAudioErr);
+        }
+      }
+
       setNotice('✓ All test questions generated from AI and local neural voices rendered successfully!');
     } catch (err) {
       console.error('[IELTS Studio] Batch Generation Pipeline Stopped:', {
@@ -554,11 +590,27 @@ export function Preparation({
               updated.voice_map = vMap;
               writeRecord(updated);
             }
-            setNotice(`Synthesizing FP32 neural audio for ${targetJob.label}...`);
+            const activeModel = getTtsModelPreference();
+            setNotice(`Synthesizing neural audio for ${targetJob.label}...`);
             try {
-              await pregenerateListeningAudio(script, targetJob.part, vMap);
+              await pregenerateListeningAudio(script, targetJob.part, vMap, undefined, activeModel);
             } catch (audioErr) {
               console.warn('[IELTS Studio] Non-fatal audio pregeneration notice:', audioErr);
+            }
+          }
+        }
+
+        if (targetJob.section === 'speaking') {
+          const speakingParts = updated.data.speaking || [];
+          if (speakingParts.length > 0) {
+            const examiner = getExaminerForAttempt(updated.id);
+            const examinerGreeting = getRandomExaminerGreeting(examiner, updated.id);
+            const activeModel = getTtsModelPreference();
+            setNotice(`Synthesizing neural examiner voice (${examiner.name}) for Speaking...`);
+            try {
+              await pregenerateSpeakingAudio(speakingParts, examiner.voiceId, undefined, activeModel, examinerGreeting);
+            } catch (audioErr) {
+              console.warn('[IELTS Studio] Non-fatal speaking audio pregeneration notice:', audioErr);
             }
           }
         }
@@ -619,24 +671,39 @@ export function Preparation({
       if (!record || !onOpenPractice) return;
 
       const listeningBlocks = record.data.listening || [];
+      const speakingParts = record.data.speaking || [];
       const hasListeningScript = listeningBlocks.some(
         (b) => Array.isArray(b?.script) && b.script.length > 0,
       );
+      const hasSpeaking = speakingParts.length > 0;
 
-      if (hasListeningScript) {
+      if (hasListeningScript || hasSpeaking) {
         const vMap = record.voice_map || randomizeVoiceMap();
         if (!record.voice_map) {
           record.voice_map = vMap;
           writeRecord(record);
         }
 
-        const cacheStatus = await checkTestAudioCacheStatus(listeningBlocks, vMap);
+        const examiner = getExaminerForAttempt(record.id);
+        const examinerGreeting = getRandomExaminerGreeting(examiner, record.id);
+
+        const cacheStatus = await checkTestAudioCacheStatus(
+          listeningBlocks,
+          vMap,
+          undefined,
+          speakingParts,
+          examiner.voiceId,
+          examinerGreeting,
+        );
         if (cacheStatus.missingVoices) {
           setRegenModalState({
             isOpen: true,
             cachedLines: cacheStatus.cachedLines,
             totalLines: cacheStatus.totalLines,
             isModelCached: cacheStatus.isModelCached,
+            speakingParts,
+            examinerVoiceId: examiner.voiceId,
+            examinerGreeting,
           });
           return;
         }
@@ -1650,6 +1717,9 @@ export function Preparation({
         cachedLines={regenModalState.cachedLines}
         totalLines={regenModalState.totalLines}
         isModelCached={regenModalState.isModelCached}
+        speakingParts={regenModalState.speakingParts || record?.data.speaking}
+        examinerVoiceId={regenModalState.examinerVoiceId}
+        examinerGreeting={regenModalState.examinerGreeting}
       />
 
       <style>{`

@@ -18,6 +18,7 @@ import { ConfirmationModal } from './ui/confirmation-modal.tsx';
 import { RegenerateAudioModal } from './regenerate-audio-modal.tsx';
 import { checkTestAudioCacheStatus } from '../lib/audio-manager.ts';
 import { randomizeVoiceMap } from '../lib/voices.ts';
+import { getExaminerForAttempt, getRandomExaminerGreeting } from '../lib/examiners.ts';
 import { SpeakingSection } from './speaking-section.tsx';
 
 const SECTION_LABELS = ['Listening', 'Reading', 'Writing', 'Speaking'] as const;
@@ -132,6 +133,10 @@ export function Player({
   const [group, setGroup] = useState(0);
   const [notesOpen, setNotesOpen] = useState(false);
   const [showForfeitModal, setShowForfeitModal] = useState(false);
+  const [selectedMapQuestionId, setSelectedMapQuestionId] = useState<string | null>(null);
+  const sessionRef = useRef(session);
+  sessionRef.current = session;
+
   const [regenModalState, setRegenModalState] = useState<{
     isOpen: boolean;
     cachedLines: number;
@@ -143,20 +148,30 @@ export function Player({
     totalLines: 0,
     isModelCached: true,
   });
-  const [selectedMapQuestionId, setSelectedMapQuestionId] = useState<string | null>(null);
-  const sessionRef = useRef(session);
-  sessionRef.current = session;
 
   useEffect(() => {
     let cancelled = false;
     const checkAudio = async () => {
       const listeningBlocks = attempt.data.listening || [];
+      const speakingParts = attempt.data.speaking || [];
       const hasListeningScript = listeningBlocks.some(
         (b) => Array.isArray(b?.script) && b.script.length > 0,
       );
-      if (hasListeningScript) {
+      const hasSpeaking = speakingParts.length > 0;
+
+      if (hasListeningScript || hasSpeaking) {
         const vMap = attempt.voice_map || randomizeVoiceMap();
-        const status = await checkTestAudioCacheStatus(listeningBlocks, vMap);
+        const examiner = getExaminerForAttempt(attempt.id);
+        const examinerGreeting = getRandomExaminerGreeting(examiner, attempt.id);
+
+        const status = await checkTestAudioCacheStatus(
+          listeningBlocks,
+          vMap,
+          undefined,
+          speakingParts,
+          examiner.voiceId,
+          examinerGreeting,
+        );
         if (!cancelled && status.missingVoices) {
           setRegenModalState({
             isOpen: true,
@@ -1486,7 +1501,6 @@ export function Player({
         loading={busy}
         warningNote="Your timed attempt will end immediately and cannot be resumed."
       />
-
       {/* Missing Audio Cache & Regeneration Modal */}
       <RegenerateAudioModal
         isOpen={regenModalState.isOpen}
@@ -1497,6 +1511,9 @@ export function Player({
         cachedLines={regenModalState.cachedLines}
         totalLines={regenModalState.totalLines}
         isModelCached={regenModalState.isModelCached}
+        speakingParts={attempt.data.speaking}
+        examinerVoiceId={getExaminerForAttempt(attempt.id).voiceId}
+        examinerGreeting={getRandomExaminerGreeting(getExaminerForAttempt(attempt.id), attempt.id)}
       />
     </main>
   );
