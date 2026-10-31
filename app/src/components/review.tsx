@@ -6,7 +6,7 @@ import { useState, useEffect, useMemo } from 'react';
 import type { FinalReport, WeaknessItem } from '../lib/scoring.ts';
 import { countWords, type AttemptRecord, type TestData, type Question } from '../lib/types.ts';
 import { generateFinalReport } from '../lib/assessment-coordinator.ts';
-import { isWritingAttempted, isSpeakingAttempted } from '../lib/attempts.ts';
+import { isWritingAttempted, isSpeakingAttempted, writeRecord } from '../lib/attempts.ts';
 import { ieltsBandToCefr } from '../lib/bands.ts';
 import { Button } from './ui/button.tsx';
 import { VisualRenderer } from './visual-renderer.tsx';
@@ -14,6 +14,7 @@ import { VisualRenderer } from './visual-renderer.tsx';
 interface ReviewProps {
   data: TestData;
   attempt?: AttemptRecord;
+  onAttemptChange?: (record: AttemptRecord) => void;
   onPractiseDrill?: (drill: WeaknessItem['drill']) => void;
   onBackToDashboard?: () => void;
 }
@@ -21,14 +22,26 @@ interface ReviewProps {
 export function Review({
   data,
   attempt,
+  onAttemptChange,
   onPractiseDrill,
   onBackToDashboard,
 }: ReviewProps) {
-  const [report, setReport] = useState<FinalReport | null>(data.finalReport ?? null);
+  const [currentAttempt, setCurrentAttempt] = useState<AttemptRecord | undefined>(attempt);
+  const [report, setReport] = useState<FinalReport | null>(attempt?.data?.finalReport ?? data.finalReport ?? null);
   const [loadingReport, setLoadingReport] = useState(false);
   const [evaluatingAi, setEvaluatingAi] = useState(false);
+  const [evaluationProgress, setEvaluationProgress] = useState<string>('');
   const [aiError, setAiError] = useState<string | null>(null);
   const [copiedTask, setCopiedTask] = useState<number | null>(null);
+
+  useEffect(() => {
+    if (attempt) {
+      setCurrentAttempt(attempt);
+      if (attempt.data?.finalReport) {
+        setReport(attempt.data.finalReport);
+      }
+    }
+  }, [attempt]);
 
   // Question review filters
   const [objectiveFilter, setObjectiveFilter] = useState<'all' | 'wrong' | 'unanswered'>('all');
@@ -73,38 +86,81 @@ export function Review({
 
   // If final report is not yet generated in the attempt, compute instant report on mount
   useEffect(() => {
-    if (!report && attempt) {
+    const rec = currentAttempt || attempt;
+    if (!report && rec) {
       setLoadingReport(true);
-      generateFinalReport(attempt, undefined, true)
+      generateFinalReport(rec, undefined, true)
         .then((rep) => setReport(rep))
         .catch((e) => console.error('[IELTS Studio] Failed to build report:', e))
         .finally(() => setLoadingReport(false));
     }
-  }, [report, attempt]);
+  }, [report, currentAttempt, attempt]);
 
   const handleRunAiEvaluation = async () => {
-    if (!attempt) return;
+    const rec = currentAttempt || attempt;
+    if (!rec) return;
     setEvaluatingAi(true);
     setAiError(null);
+    setEvaluationProgress('Starting AI evaluation...');
     try {
-      const updated = await generateFinalReport(attempt, undefined, false);
+      const updated = await generateFinalReport(rec, undefined, false, (progress) => {
+        setEvaluationProgress(progress);
+      });
       setReport(updated);
+
+      // Persist updated scores and finalReport to attempt
+      const updatedRecord: AttemptRecord = {
+        ...rec,
+        updated_at: Date.now(),
+        revision: (rec.revision || 0) + 1,
+        data: {
+          ...rec.data,
+          finalReport: updated,
+          result: rec.data.result
+            ? {
+                ...rec.data.result,
+                listening: {
+                  ...rec.data.result.listening,
+                  band: updated.modules.listening?.band ?? rec.data.result.listening.band,
+                },
+                reading: {
+                  ...rec.data.result.reading,
+                  band: updated.modules.reading?.band ?? rec.data.result.reading.band,
+                },
+                writing: {
+                  ...rec.data.result.writing,
+                  band: updated.modules.writing?.band ?? rec.data.result.writing.band,
+                },
+                speaking: {
+                  ...rec.data.result.speaking,
+                  band: updated.modules.speaking?.band ?? rec.data.result.speaking.band,
+                },
+                overall: updated.overall.band ?? rec.data.result.overall,
+              }
+            : undefined,
+        },
+      };
+
+      writeRecord(updatedRecord);
+      setCurrentAttempt(updatedRecord);
+      onAttemptChange?.(updatedRecord);
     } catch (e) {
       setAiError((e as Error).message || 'Failed to complete AI evaluation.');
     } finally {
       setEvaluatingAi(false);
+      setEvaluationProgress('');
     }
   };
 
-  const testRecord = attempt?.data || data;
+  const testRecord = currentAttempt?.data || attempt?.data || data;
   const writingAttempted = isWritingAttempted(testRecord);
   const speakingAttempted = isSpeakingAttempted(testRecord);
   const modules = report?.modules;
 
   const displayWritingBand = writingAttempted && modules?.writing?.band !== null && modules?.writing?.band !== undefined;
   const displaySpeakingBand = speakingAttempted && modules?.speaking?.band !== null && modules?.speaking?.band !== undefined;
-  const overallBand = (writingAttempted && speakingAttempted) ? report?.overall.band : null;
-  const cefrInfo = ieltsBandToCefr(overallBand ?? modules?.listening?.band ?? modules?.reading?.band);
+  const overallBand = report?.overall?.band ?? (testRecord.scope !== 'full' ? (modules?.writing?.band ?? modules?.speaking?.band ?? modules?.listening?.band ?? modules?.reading?.band) : null);
+  const cefrInfo = ieltsBandToCefr(overallBand ?? modules?.listening?.band ?? modules?.reading?.band ?? modules?.writing?.band ?? modules?.speaking?.band);
 
   const weaknesses = report?.weakness_profile.weaknesses || [];
   const strengths = report?.weakness_profile.strengths || [];
@@ -323,8 +379,10 @@ export function Review({
 
       {/* Optional AI Diagnostic Action Card */}
       {((writingAttempted && modules?.writing?.confidence === 'low') ||
-        (speakingAttempted && modules?.speaking?.confidence === 'low')) && (
+        (speakingAttempted && modules?.speaking?.confidence === 'low')) ? (
         <div
+          role="region"
+          aria-label="AI Writing and Speaking Assessment"
           style={{
             display: 'flex',
             alignItems: 'center',
@@ -334,18 +392,46 @@ export function Review({
             backgroundColor: '#eff6ff',
             border: '1px solid #bfdbfe',
             borderRadius: 12,
-            padding: '14px 20px',
+            padding: '16px 20px',
             marginBottom: 24,
           }}
         >
           <div>
-            <strong style={{ fontSize: '0.92rem', color: '#1e40af', display: 'flex', alignItems: 'center', gap: 6 }}>
+            <strong style={{ fontSize: '0.94rem', color: '#1e40af', display: 'flex', alignItems: 'center', gap: 6 }}>
               <span>✨</span>
               <span>Detailed AI Writing &amp; Speaking Assessment</span>
             </strong>
-            <p style={{ margin: '2px 0 0', fontSize: '0.82rem', color: '#3b82f6' }}>
-              Instant objective scoring is complete. You can run deep LLM assessment on your written essays and spoken answers at any time.
+            <p style={{ margin: '3px 0 0', fontSize: '0.84rem', color: '#2563eb' }}>
+              Instant objective scoring is complete. Run deep LLM evaluation on both your written essays and spoken recordings in parallel.
             </p>
+            {evaluatingAi && evaluationProgress && (
+              <div
+                role="status"
+                aria-live="polite"
+                style={{
+                  marginTop: 8,
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 8,
+                  fontSize: '0.82rem',
+                  color: '#1d4ed8',
+                  fontWeight: 600,
+                }}
+              >
+                <span
+                  style={{
+                    display: 'inline-block',
+                    width: 14,
+                    height: 14,
+                    border: '2px solid #93c5fd',
+                    borderTopColor: '#1d4ed8',
+                    borderRadius: '50%',
+                    animation: 'spin 1s linear infinite',
+                  }}
+                />
+                <span>{evaluationProgress}</span>
+              </div>
+            )}
           </div>
           <Button
             variant="primary"
@@ -358,7 +444,44 @@ export function Review({
             {evaluatingAi ? 'Evaluating with AI…' : 'Run Deep AI Evaluation →'}
           </Button>
         </div>
-      )}
+      ) : (writingAttempted || speakingAttempted) && (modules?.writing?.confidence === 'medium' || modules?.speaking?.confidence === 'medium') ? (
+        <div
+          role="status"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            backgroundColor: '#f0fdf4',
+            border: '1px solid #bbf7d0',
+            borderRadius: 12,
+            padding: '14px 20px',
+            marginBottom: 24,
+          }}
+        >
+          <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+            <span style={{ fontSize: '20px', color: '#16a34a' }}>✓</span>
+            <div>
+              <div style={{ fontSize: '0.92rem', fontWeight: 800, color: '#166534' }}>
+                AI Writing &amp; Speaking Assessment Complete
+              </div>
+              <div style={{ fontSize: '0.82rem', color: '#15803d' }}>
+                All criteria and band scores have been evaluated with LLM and persisted to your test record.
+              </div>
+            </div>
+          </div>
+          <Button
+            variant="outline"
+            size="sm"
+            loading={evaluatingAi}
+            disabled={evaluatingAi}
+            onClick={handleRunAiEvaluation}
+          >
+            {evaluatingAi ? 'Re-evaluating…' : 'Re-evaluate with AI'}
+          </Button>
+        </div>
+      ) : null}
 
       {aiError && (
         <div role="alert" style={{ background: '#fff1f2', border: '1px solid #fecdd3', color: '#be123c', padding: '10px 14px', borderRadius: 8, marginBottom: 20, fontSize: '0.88rem' }}>
@@ -1083,14 +1206,76 @@ export function Review({
                   boxShadow: '0 1px 2px rgba(15, 23, 42, 0.03)',
                 }}
               >
-                <h3 style={{ margin: '0 0 12px 0', fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
-                  Speaking Part {part.part} Analysis
-                </h3>
+                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
+                  <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
+                    Speaking Part {part.part} Analysis
+                  </h3>
+                  {modules?.speaking?.band != null && (
+                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#b45309', backgroundColor: '#fef3c7', padding: '3px 10px', borderRadius: '6px', border: '1px solid #fde68a' }}>
+                      Overall Speaking Band: {modules.speaking.band.toFixed(1)}
+                    </span>
+                  )}
+                </div>
+
+                {/* 4 Public Criteria Breakdown (Overall Speaking) */}
+                {modules?.speaking?.criteria && part.part === 1 && (
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '16px' }}>
+                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Fluency &amp; Coherence</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.FC.toFixed(1)}</div>
+                    </div>
+                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Lexical Resource</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.LR.toFixed(1)}</div>
+                    </div>
+                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Grammar Range</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.GRA.toFixed(1)}</div>
+                    </div>
+                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Pronunciation</div>
+                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.PR.toFixed(1)}</div>
+                    </div>
+                  </div>
+                )}
+
+                {/* Speech Metrics */}
+                {part.metrics && (
+                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: '14px', fontSize: '12px', color: '#475569' }}>
+                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                      <strong>Pacing:</strong> {part.metrics.words_per_minute} WPM
+                    </div>
+                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                      <strong>Fillers:</strong> {Math.round(part.metrics.filler_rate * 100)}%
+                    </div>
+                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                      <strong>Pauses &gt; 1s:</strong> {part.metrics.pause_count_over_1s}
+                    </div>
+                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                      <strong>Self-Repairs:</strong> {part.metrics.self_repair_count}
+                    </div>
+                  </div>
+                )}
 
                 {/* Transcript */}
                 <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '14px', fontSize: '12.5px', lineHeight: 1.55 }}>
-                  <strong>Transcript:</strong> {part.transcript}
+                  <strong style={{ color: '#0f172a' }}>Candidate Transcript:</strong> {part.transcript}
                 </div>
+
+                {/* Model Spoken Answer */}
+                {part.improved_answer && (
+                  <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '14px 18px', marginBottom: '14px' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                      <span style={{ fontSize: '14px' }}>✨</span>
+                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: '#166534' }}>
+                        Band 8.5 Model Spoken Answer (Cambridge Benchmark)
+                      </h4>
+                    </div>
+                    <p style={{ margin: 0, fontSize: '12.5px', lineHeight: 1.6, color: '#14532d', fontStyle: 'italic' }}>
+                      &ldquo;{part.improved_answer}&rdquo;
+                    </p>
+                  </div>
+                )}
 
                 {/* Vocabulary Upgrades */}
                 {part.vocab_upgrades.length > 0 && (

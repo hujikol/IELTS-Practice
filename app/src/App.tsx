@@ -231,6 +231,7 @@ export function App() {
         <Review
           data={view.attempt.data}
           attempt={view.attempt}
+          onAttemptChange={(updated) => setView({ stage: 'review', attempt: updated })}
           onPractiseDrill={() => setView({ stage: 'prepare' })}
           onBackToDashboard={() => setView({ stage: 'dashboard' })}
         />

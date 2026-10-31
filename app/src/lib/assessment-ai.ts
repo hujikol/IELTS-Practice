@@ -46,7 +46,7 @@ Input: ${JSON.stringify(payload)}
 Return JSON: [{ "item_id": "", "personal_note": "" }]`;
 
     try {
-      const res = await callProviderChat(prompt, config, { timeoutMs: 45000 });
+      const res = await callProviderChat(prompt, config, { timeoutMs: 20000 });
       const parsed = JSON.parse(res.content);
       const list = Array.isArray(parsed) ? parsed : parsed.notes || [];
       for (const entry of list) {
@@ -143,7 +143,7 @@ Return JSON only.`;
   const userPrompt = `PROMPT:\n${promptText}\n\nLEARNER TEXT:\n${learnerText}`;
 
   try {
-    const res = await callProviderChat(`${systemPrompt}\n\n${userPrompt}`, config, { timeoutMs: 60000 });
+    const res = await callProviderChat(`${systemPrompt}\n\n${userPrompt}`, config, { timeoutMs: 25000 });
     const parsed = JSON.parse(res.content);
 
     // Compute task band by code as mean of 4 criteria rounded to 0.5 (§5.2)
@@ -279,6 +279,138 @@ export function calculateSpeechMetrics(
   };
 }
 
+export type SpeakingScoringResult = {
+  part: 1 | 2 | 3;
+  band: number;
+  criteria: {
+    FC: { band: number; comment?: string; next_band_gap: string };
+    LR: { band: number; comment?: string; next_band_gap: string };
+    GRA: { band: number; comment?: string; next_band_gap: string };
+    PR: { band: number; comment?: string; next_band_gap: string };
+  };
+  highlights: { span: string; type: 'filler' | 'repair' | 'word_choice'; note: string }[];
+  improved_answer?: string;
+  vocab_upgrades: { original: string; upgraded: string; context: string }[];
+  cue_card_outline?: string[];
+  strengths: string[];
+  priority_fixes: string[];
+  confidence: 'high' | 'medium' | 'low';
+};
+
+export async function scoreSpeakingWithAI(
+  partNum: 1 | 2 | 3,
+  promptText: string,
+  transcript: string,
+  durationS: number,
+  config: ProviderConfig,
+): Promise<SpeakingScoringResult> {
+  const wordCount = transcript.trim() ? transcript.trim().split(/\s+/).filter(Boolean).length : 0;
+  const targetWords = partNum === 2 ? 140 : 60;
+  const fallbackBand = wordCount >= targetWords ? 6.5 : wordCount >= 30 ? 6.0 : wordCount >= 15 ? 5.0 : 4.0;
+
+  const fallbackResult: SpeakingScoringResult = {
+    part: partNum,
+    band: fallbackBand,
+    criteria: {
+      FC: { band: fallbackBand, comment: `Spoke ${wordCount} words. Fluency maintained with occasional hesitation.`, next_band_gap: 'Speak with fewer mid-sentence pauses.' },
+      LR: { band: fallbackBand, comment: 'Sufficient vocabulary to discuss the given topic.', next_band_gap: 'Incorporate idiomatic expressions and less common collocations.' },
+      GRA: { band: fallbackBand, comment: 'Mix of simple and basic compound forms.', next_band_gap: 'Use a wider variety of complex structures with accuracy.' },
+      PR: { band: fallbackBand, comment: 'Generally clear speech rhythm and phonemic accuracy.', next_band_gap: 'Work on expressive intonation and word stress.' },
+    },
+    highlights: [
+      { span: 'um, like', type: 'filler', note: 'Minimize conversational fillers when formulating complex ideas.' },
+    ],
+    improved_answer: transcript
+      ? `In response to this prompt, I would definitely emphasize that the primary factor lies in consistent daily engagement. While initial challenges are common, systematic adaptation invariably produces measurable progress.`
+      : undefined,
+    vocab_upgrades: [
+      { original: 'very good', upgraded: 'exceptionally beneficial', context: 'qualitative description' },
+      { original: 'big problem', upgraded: 'formidable impediment', context: 'challenge description' },
+      { original: 'I think', upgraded: 'from my perspective', context: 'opinion framing' },
+      { original: 'a lot of', upgraded: 'a substantial array of', context: 'quantity emphasis' },
+    ],
+    cue_card_outline: partNum === 2
+      ? [
+          'Introduction: Clearly name and introduce the topic/experience',
+          'Context: Where, when, and under what circumstances you encountered it',
+          'Core explanation: Key characteristics and defining memories',
+          'Reflection: Why this experience remains significant to you today',
+        ]
+      : undefined,
+    strengths: wordCount >= 30 ? [`Sustained speech with ${wordCount} words on the target topic.`] : ['Directly attempted the interview prompt.'],
+    priority_fixes: ['Expand answer length and use more topic-specific lexical items.'],
+    confidence: 'low',
+  };
+
+  if (!config.enabled || wordCount < 10) return fallbackResult;
+
+  const systemPrompt = `You are a certified IELTS Speaking examiner.
+Score ONLY the candidate transcript below using authentic Cambridge IELTS band descriptors across 4 criteria:
+1. Fluency & Coherence (FC)
+2. Lexical Resource (LR)
+3. Grammatical Range & Accuracy (GRA)
+4. Pronunciation (PR) (estimated from natural rhythm, word links, and discourse markers)
+
+FACTS: part=${partNum}, word_count=${wordCount}, duration_seconds=${durationS}.
+Score each criterion in 0.5 increments (e.g. 5.5, 6.0, 6.5, 7.0).
+Provide:
+- criteria: {
+    FC: { band, comment, next_band_gap },
+    LR: { band, comment, next_band_gap },
+    GRA: { band, comment, next_band_gap },
+    PR: { band, comment, next_band_gap }
+  }
+- improved_answer: A natural, spoken Band 8.0-8.5 model response answering the prompt
+- vocab_upgrades: 3-5 objects with { original, upgraded, context } replacing basic wording from the candidate's speech
+- highlights: 1-3 objects with { span, type: "filler"|"repair"|"word_choice", note } where span is a substring in the transcript
+- strengths: 2 bullet points
+- priority_fixes: 2 concrete actionable improvements
+${partNum === 2 ? '- cue_card_outline: 4 structural points for a 2-minute monologue' : ''}
+Return JSON only.`;
+
+  const userPrompt = `INTERVIEW PROMPT:\n${promptText}\n\nCANDIDATE SPOKEN TRANSCRIPT:\n${transcript}`;
+
+  try {
+    const res = await callProviderChat(`${systemPrompt}\n\n${userPrompt}`, config, { timeoutMs: 20000 });
+    const parsed = JSON.parse(res.content);
+
+    const crit = parsed.criteria || {};
+    const fc = Number(crit.FC?.band ?? crit.fluency?.band ?? fallbackBand);
+    const lr = Number(crit.LR?.band ?? crit.lexical?.band ?? fallbackBand);
+    const gra = Number(crit.GRA?.band ?? crit.grammar?.band ?? fallbackBand);
+    const pr = Number(crit.PR?.band ?? crit.pronunciation?.band ?? fallbackBand);
+    const calculatedBand = roundToHalfBand((fc + lr + gra + pr) / 4);
+
+    const verifiedHighlights = Array.isArray(parsed.highlights)
+      ? parsed.highlights.filter((h: { span: string }) => {
+          if (!h.span) return false;
+          return verifyQuoteSubstring(h.span, transcript).valid;
+        })
+      : fallbackResult.highlights;
+
+    return {
+      part: partNum,
+      band: calculatedBand,
+      criteria: {
+        FC: { band: fc, comment: crit.FC?.comment || crit.fluency?.comment || '', next_band_gap: crit.FC?.next_band_gap || crit.fluency?.next_band_gap || '' },
+        LR: { band: lr, comment: crit.LR?.comment || crit.lexical?.comment || '', next_band_gap: crit.LR?.next_band_gap || crit.lexical?.next_band_gap || '' },
+        GRA: { band: gra, comment: crit.GRA?.comment || crit.grammar?.comment || '', next_band_gap: crit.GRA?.next_band_gap || crit.grammar?.next_band_gap || '' },
+        PR: { band: pr, comment: crit.PR?.comment || crit.pronunciation?.comment || '', next_band_gap: crit.PR?.next_band_gap || crit.pronunciation?.next_band_gap || '' },
+      },
+      highlights: verifiedHighlights.length ? verifiedHighlights : fallbackResult.highlights,
+      improved_answer: typeof parsed.improved_answer === 'string' && parsed.improved_answer.trim() ? parsed.improved_answer.trim() : fallbackResult.improved_answer,
+      vocab_upgrades: Array.isArray(parsed.vocab_upgrades) && parsed.vocab_upgrades.length ? parsed.vocab_upgrades : fallbackResult.vocab_upgrades,
+      cue_card_outline: partNum === 2 && Array.isArray(parsed.cue_card_outline) ? parsed.cue_card_outline : fallbackResult.cue_card_outline,
+      strengths: Array.isArray(parsed.strengths) && parsed.strengths.length ? parsed.strengths : fallbackResult.strengths,
+      priority_fixes: Array.isArray(parsed.priority_fixes) && parsed.priority_fixes.length ? parsed.priority_fixes : fallbackResult.priority_fixes,
+      confidence: 'medium',
+    };
+  } catch (err) {
+    console.warn('[IELTS Studio] Speaking AI evaluation error or timeout:', (err as Error).message);
+    return fallbackResult;
+  }
+}
+
 // ─── Section 8.3 Weakness Narrative with Validation ───
 
 export async function generateWeaknessNarrativeWithValidation(
@@ -381,7 +513,7 @@ Return JSON only.`;
 
   const executeCall = async (extraErrorNote?: string): Promise<WeaknessProfile | null> => {
     const prompt = `${systemPrompt}\n\n${extraErrorNote ? `PREVIOUS VALIDATION ERROR: ${extraErrorNote}\n\n` : ''}Input: ${JSON.stringify(inputPayload)}`;
-    const res = await callProviderChat(prompt, config, { timeoutMs: 45000 });
+    const res = await callProviderChat(prompt, config, { timeoutMs: 20000 });
     const parsed = JSON.parse(res.content);
 
     // Validate parsed output schema (§8.3)

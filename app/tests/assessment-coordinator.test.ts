@@ -85,6 +85,36 @@ test('assessment-coordinator: attempted writing yields calculated writing band',
   assert.ok(report.modules.writing!.band! > 0);
 });
 
+test('assessment-coordinator: attempted speaking yields calculated speaking band and criteria', async () => {
+  const data = emptyTest('full', 0, 'balanced', { provider: 'manual', model: 'mock', createdAt: Date.now() });
+  data.speakingTexts = [
+    'I live in a vibrant coastal city with excellent public transportation and a very welcoming community where people enjoy outdoor activities.',
+    'I would like to describe an unforgettable journey to the ancient mountains where I hiked for three days with my close friends through misty forests.',
+    'In my opinion modern technology has profoundly reshaped human interaction, creating new opportunities for collaboration while sometimes reducing face to face intimacy.',
+  ];
+
+  const record: AttemptRecord = {
+    id: 'test_att_speaking',
+    owner_id: 'local',
+    created_at: Date.now() - 3600000,
+    updated_at: Date.now(),
+    revision: 1,
+    mode: 'untimed',
+    status: 'completed',
+    data,
+    requests: {},
+    imports: {},
+    import_history: {},
+  };
+
+  const report = await generateFinalReport(record, undefined, true);
+  assert.equal(report.modules.speaking?.status, 'assessed');
+  assert.ok(typeof report.modules.speaking?.band === 'number');
+  assert.ok(report.modules.speaking!.band! >= 5.0);
+  assert.equal(report.review.speaking.parts.length, 3);
+  assert.ok(report.modules.speaking?.criteria?.FC! >= 5.0);
+});
+
 test('sanitizeAttemptRecord: clears fabricated writing and speaking scores from stale reports', () => {
   const data = emptyTest('full', 0, 'balanced', { provider: 'manual', model: 'mock', createdAt: Date.now() });
   assert.equal(isWritingAttempted(data), false);
