@@ -4,27 +4,6 @@ An offline-first, client-side web application for IELTS Academic preparation. Ge
 
 ---
 
-## 🚀 Implementation Status
-
-The project has completed its core architecture migration from legacy cloud/desktop wrappers into a clean, modern, pure TypeScript + React single-page application (`app/`).
-
-| Milestone / Feature | Status | Notes |
-|---|---|---|
-| **Core Architecture & Storage** | ✅ Complete | Browser-native durable storage (`localStorage` & `IndexedDB`), atomic transactions, revision conflict protection. |
-| **Material Generation & Validation** | ✅ Complete | Full mock tests (`l1-l4`, `r1-r3`, `w1-w2`, `s1-s3`) & focused modules with strict schema validation. |
-| **AI Provider Layer** | ✅ Complete | Compatible with OpenAI, OpenRouter, Experiential Labs, local Ollama/LM Studio, and 100% offline manual copy/paste mode. |
-| **Listening Module & Audio** | ✅ Complete | In-browser Kokoro neural TTS, distinct British/American/Australian voices, pause/resume queue handling, strict timed exam 1-play mode. |
-| **Interactive Map & Plan Labelling** | ✅ Complete | Architectural SVG vector map, HTML5 drag-and-drop & click-to-place, clean place-name extraction, bi-directional question syncing. |
-| **Reading Academic Module** | ✅ Complete | Authentic word window constraints (720–910 words), TFNG, YNNG, multiple choice, matching headings, summary gaps. |
-| **Writing Module** | ✅ Complete | Task 1 vector visuals (process, line, bar, map comparison) & Task 2 essay capture with live word counter and benchmark comparisons. |
-| **Interactive Speaking Section** | ✅ Complete | 1-on-1 voice interview with real-time mic recording, VAD silence auto-advance, Cambridge Cue Card layout, 60s prep & 2:00 speaking timers. |
-| **Scoring & Verification Engine** | ✅ Complete | Hard Rule: code computes all numbers. Verbatim substring quote verification for AI feedback. Empty response protection. |
-| **CEFR Level & Band Reporting** | ✅ Complete | Official IELTS-to-CEFR concordance (C2 Mastery down to A1), executive dashboard analytics, completed test history. |
-| **UI/UX & Design System (/web-uix)** | ✅ Complete | Accessible Royal Blue educational palette, standardized button hierarchy with tactile elevations, responsive fixed-viewport layouts. |
-| **Test Suite & Verification** | ✅ Complete | 461 automated tests passing (`npm test`), strict TypeScript typechecking, zero ESLint warnings, production build verified. |
-
----
-
 ## 🎯 Hard Rules & Guarantees
 
 1. **Code computes every number**: Raw scores, bands, word counts, accuracy, timings, averages, and IELTS half-band rounding are computed strictly by code. The AI never grades objective items and never invents overall bands.
@@ -113,7 +92,7 @@ Open `http://localhost:5173` in your browser.
 
 ### Quality Verification
 ```bash
-# Run unit & integration tests (461 tests)
+# Run unit & integration tests (477 tests)
 pnpm test
 
 # Run TypeScript typecheck
@@ -155,7 +134,7 @@ IELTS_practice/
 │   │       ├── material.ts               # Schema validation & test data structures
 │   │       ├── providers.ts              # LLM integration & prompt orchestration
 │   │       └── types.ts                  # Domain models & utility functions
-│   ├── tests/                            # 461 automated unit & integration tests
+│   ├── tests/                            # 477 automated unit & integration tests
 │   └── package.json
 └── README.md
 ```
