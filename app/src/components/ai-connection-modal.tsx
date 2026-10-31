@@ -319,13 +319,13 @@ export function AiConnectionModal({ isOpen, onClose, onConfigChanged }: AiConnec
                       textAlign: 'left',
                       padding: '10px 12px',
                       borderRadius: '8px',
-                      border: isSelected ? '2px solid #0f172a' : '1px solid #e2e8f0',
-                      backgroundColor: isSelected ? '#f8fafc' : '#ffffff',
+                      border: isSelected ? '2px solid #2563eb' : '1px solid #e2e8f0',
+                      backgroundColor: isSelected ? '#eff6ff' : '#ffffff',
                       cursor: 'pointer',
                       transition: 'all 0.15s ease',
                     }}
                   >
-                    <div style={{ fontSize: '13px', fontWeight: 600, color: '#0f172a' }}>{p.name}</div>
+                    <div style={{ fontSize: '13px', fontWeight: 600, color: isSelected ? '#1e40af' : '#0f172a' }}>{p.name}</div>
                     <div style={{ fontSize: '11px', color: '#64748b', marginTop: '2px' }}>{p.model}</div>
                   </button>
                 );

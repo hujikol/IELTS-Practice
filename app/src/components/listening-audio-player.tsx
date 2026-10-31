@@ -8,6 +8,7 @@ import {
   subscribeAudioProgress,
   synthesizeSpeechAudio,
   pregenerateListeningAudio,
+  getTtsDevicePreference,
   type AudioProgressEvent,
 } from '../lib/audio-manager.ts';
 import {
@@ -690,7 +691,7 @@ export function ListeningAudioPlayer({
                 Audio System Information
               </div>
               <div>
-                • Model: Kokoro-82M (FP32 Full-Precision) via ONNX WebAssembly.
+                • Engine: Kokoro-82M via {getTtsDevicePreference() === 'webgpu' ? 'WebGPU' : 'CPU (WebAssembly)'}.
               </div>
               <div style={{ marginTop: '4px' }}>
                 • Neural TTS Cache: {modelCached ? '✓ Cached offline in browser storage.' : 'Ready on-demand / Web Speech fallback.'}

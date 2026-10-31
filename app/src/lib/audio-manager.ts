@@ -128,6 +128,40 @@ export const TTS_MODELS: Record<TtsModelType, TtsModelInfo> = {
 const TTS_MODEL_PREF_KEY = 'ielts_tts_model_preference';
 let inMemoryModelPref: TtsModelType = 'kokoro-fp32';
 
+export type TtsDeviceType = 'webgpu' | 'cpu';
+export const TTS_DEVICE_PREF_KEY = 'ielts_tts_device_preference';
+let inMemoryDevicePref: TtsDeviceType = 'webgpu';
+
+export function getTtsDevicePreference(): TtsDeviceType {
+  if (typeof localStorage !== 'undefined') {
+    try {
+      const val = localStorage.getItem(TTS_DEVICE_PREF_KEY);
+      if (val === 'webgpu' || val === 'cpu') {
+        return val;
+      }
+    } catch {
+      // ignore
+    }
+  }
+  return inMemoryDevicePref;
+}
+
+export function setTtsDevicePreference(device: TtsDeviceType): void {
+  inMemoryDevicePref = device;
+  if (typeof localStorage !== 'undefined') {
+    try {
+      localStorage.setItem(TTS_DEVICE_PREF_KEY, device);
+    } catch {
+      // ignore
+    }
+  }
+  if (loadedDevice !== device) {
+    modelInstance = null;
+    downloadPromise = null;
+    loadedDevice = null;
+  }
+}
+
 export function getTtsModelPreference(): TtsModelType {
   if (typeof localStorage !== 'undefined') {
     try {
@@ -172,6 +206,7 @@ export type AudioProgressEvent = {
 let modelInstance: unknown = null;
 let downloadPromise: Promise<unknown> | null = null;
 let loadedDtype: string | null = null;
+let loadedDevice: string | null = null;
 const listeners = new Set<(event: AudioProgressEvent) => void>();
 
 /** Subscribe to model download progress events */
@@ -224,12 +259,13 @@ export async function isAudioModelCached(targetModel?: TtsModelType): Promise<bo
 }
 
 /**
- * Downloads the neural audio model once with progress tracking,
- * using the configured precision (FP32, Q8, or Q4).
+ * Downloads and initializes the neural audio model once with progress tracking,
+ * using the configured precision (FP32, FP16, Q8, or Q4) and compute device (WebGPU by default, or CPU/WASM).
  */
 export async function downloadAudioModelOnce(
   onProgress?: (progress: number, message: string) => void,
   forcedModel?: TtsModelType,
+  forcedDevice?: TtsDeviceType,
 ): Promise<unknown> {
   const selectedModelId = forcedModel || getTtsModelPreference();
   if (selectedModelId === 'webspeech') {
@@ -239,13 +275,14 @@ export async function downloadAudioModelOnce(
 
   const modelInfo = TTS_MODELS[selectedModelId] || TTS_MODELS['kokoro-fp32'];
   const targetDtype = modelInfo.dtype || 'fp32';
+  const targetDevice = forcedDevice || getTtsDevicePreference();
 
-  if (modelInstance && loadedDtype === targetDtype) {
-    onProgress?.(100, `${modelInfo.name} already loaded in memory.`);
+  if (modelInstance && loadedDtype === targetDtype && loadedDevice === targetDevice) {
+    onProgress?.(100, `${modelInfo.name} (${targetDevice.toUpperCase()}) already loaded in memory.`);
     return modelInstance;
   }
 
-  if (downloadPromise && loadedDtype === targetDtype) {
+  if (downloadPromise && loadedDtype === targetDtype && loadedDevice === targetDevice) {
     return downloadPromise;
   }
 
@@ -253,7 +290,9 @@ export async function downloadAudioModelOnce(
   notify({
     status: 'downloading',
     progress: isCached ? 90 : 0,
-    message: isCached ? `Loading ${modelInfo.name} from cache...` : `Downloading ${modelInfo.name} weights (${modelInfo.downloadSize})...`,
+    message: isCached
+      ? `Loading ${modelInfo.name} (${targetDevice.toUpperCase()}) from cache...`
+      : `Downloading ${modelInfo.name} weights (${modelInfo.downloadSize})...`,
   });
 
   downloadPromise = (async () => {
@@ -261,24 +300,58 @@ export async function downloadAudioModelOnce(
       // Dynamic import of kokoro-js to avoid blocking initial bundle
       const { KokoroTTS } = await import('kokoro-js');
 
-      const model = await KokoroTTS.from_pretrained(MODEL_ID, {
-        dtype: targetDtype,
-        device: 'wasm',
-        progress_callback: (item: { progress?: number; status?: string; file?: string }) => {
-          const rawPct = typeof item.progress === 'number' ? Math.round(item.progress) : 0;
-          const msg = item.file ? `Loading ${item.file}` : `Fetching ${modelInfo.name} weights...`;
-          onProgress?.(rawPct, msg);
-          notify({
-            status: 'downloading',
-            progress: rawPct,
-            file: item.file,
-            message: msg,
+      let deviceToUse: 'webgpu' | 'wasm' = targetDevice === 'webgpu' ? 'webgpu' : 'wasm';
+      const hasGpu = typeof navigator !== 'undefined' && 'gpu' in navigator && !!navigator.gpu;
+      if (deviceToUse === 'webgpu' && !hasGpu) {
+        console.warn('[KokoroTTS] WebGPU not supported on this browser/device; falling back to CPU (WASM).');
+        deviceToUse = 'wasm';
+      }
+
+      let model;
+      try {
+        model = await KokoroTTS.from_pretrained(MODEL_ID, {
+          dtype: targetDtype,
+          device: deviceToUse,
+          progress_callback: (item: { progress?: number; status?: string; file?: string }) => {
+            const rawPct = typeof item.progress === 'number' ? Math.round(item.progress) : 0;
+            const msg = item.file ? `Loading ${item.file}` : `Fetching ${modelInfo.name} weights...`;
+            onProgress?.(rawPct, msg);
+            notify({
+              status: 'downloading',
+              progress: rawPct,
+              file: item.file,
+              message: msg,
+            });
+          },
+        });
+      } catch (gpuErr) {
+        // If WebGPU was attempted and failed, fallback to CPU (WASM)
+        if (deviceToUse === 'webgpu') {
+          console.warn('[KokoroTTS] WebGPU initialization failed, falling back to CPU (WASM):', gpuErr);
+          deviceToUse = 'wasm';
+          model = await KokoroTTS.from_pretrained(MODEL_ID, {
+            dtype: targetDtype,
+            device: 'wasm',
+            progress_callback: (item: { progress?: number; status?: string; file?: string }) => {
+              const rawPct = typeof item.progress === 'number' ? Math.round(item.progress) : 0;
+              const msg = item.file ? `Loading ${item.file}` : `Fetching ${modelInfo.name} weights (CPU fallback)...`;
+              onProgress?.(rawPct, msg);
+              notify({
+                status: 'downloading',
+                progress: rawPct,
+                file: item.file,
+                message: msg,
+              });
+            },
           });
-        },
-      });
+        } else {
+          throw gpuErr;
+        }
+      }
 
       modelInstance = model;
       loadedDtype = targetDtype;
+      loadedDevice = targetDevice;
 
       if (typeof localStorage !== 'undefined') {
         localStorage.setItem(storageFlagFor(selectedModelId), 'true');
@@ -287,7 +360,7 @@ export async function downloadAudioModelOnce(
       notify({
         status: 'ready',
         progress: 100,
-        message: `${modelInfo.name} ready and cached offline.`,
+        message: `${modelInfo.name} ready on ${deviceToUse.toUpperCase()} and cached offline.`,
       });
 
       return model;
@@ -315,6 +388,167 @@ function simpleHash(str: string): string {
 }
 
 /**
+ * Calculates the exact IndexedDB cache key for a synthesized audio clip.
+ */
+export function getAudioClipCacheKey(
+  text: string,
+  voiceId = 'af_heart',
+  speed = 1.0,
+  forcedModel?: TtsModelType,
+): string {
+  const modelId = forcedModel || getTtsModelPreference();
+  const modelInfo = TTS_MODELS[modelId] || TTS_MODELS['kokoro-fp32'];
+  const targetDtype = modelInfo.dtype || 'fp32';
+  const clean = text.trim();
+  return `kokoro_${targetDtype}_${voiceId}_${speed.toFixed(2)}_${simpleHash(clean)}`;
+}
+
+export type TestAudioCacheStatus = {
+  isModelCached: boolean;
+  totalLines: number;
+  cachedLines: number;
+  missingVoices: boolean;
+  modelType: TtsModelType;
+};
+
+/**
+ * Checks whether the neural model weights and generated audio clips for a test's
+ * listening sections exist in the browser's local cache.
+ */
+export async function checkTestAudioCacheStatus(
+  listeningBlocks: { script?: { speaker?: string; text?: string }[] }[],
+  voiceMap?: Record<string, VoiceMapEntry>,
+  forcedModel?: TtsModelType,
+): Promise<TestAudioCacheStatus> {
+  const modelType = forcedModel || getTtsModelPreference();
+  if (modelType === 'webspeech') {
+    return {
+      isModelCached: true,
+      totalLines: 0,
+      cachedLines: 0,
+      missingVoices: false,
+      modelType,
+    };
+  }
+
+  const isModelCachedVal = await isAudioModelCached(modelType);
+
+  let totalLines = 0;
+  let cachedLines = 0;
+
+  const validBlocks = (listeningBlocks || []).filter(
+    (b) => Array.isArray(b?.script) && b.script.length > 0,
+  );
+
+  if (validBlocks.length === 0) {
+    return {
+      isModelCached: isModelCachedVal,
+      totalLines: 0,
+      cachedLines: 0,
+      missingVoices: !isModelCachedVal,
+      modelType,
+    };
+  }
+
+  const vMap = voiceMap || {};
+
+  for (let bIdx = 0; bIdx < validBlocks.length; bIdx++) {
+    const block = validBlocks[bIdx]!;
+    const partNum = bIdx + 1;
+    const script = (block.script || []).filter((s) => s && s.text && s.text.trim().length > 0);
+
+    for (const item of script) {
+      totalLines++;
+      const speakerType =
+        item.speaker === 'woman' || /female|_f_/i.test(item.speaker || '')
+          ? 'woman'
+          : item.speaker === 'man' || /male|_m_/i.test(item.speaker || '')
+            ? 'man'
+            : 'narrator';
+      const voiceId = voiceForPart(vMap, partNum, speakerType);
+      const key = getAudioClipCacheKey(item.text!, voiceId, 1.0, modelType);
+      const cached = await getCachedAudioBlob(key);
+      if (cached && cached.size > 0) {
+        cachedLines++;
+      }
+    }
+  }
+
+  const missingVoices = !isModelCachedVal || (totalLines > 0 && cachedLines < totalLines);
+
+  return {
+    isModelCached: isModelCachedVal,
+    totalLines,
+    cachedLines,
+    missingVoices,
+    modelType,
+  };
+}
+
+/**
+ * Downloads the neural model weights and re-synthesizes all listening audio tracks
+ * for an entire test, with live progress reporting across both stages.
+ */
+export async function downloadAndRegenerateAllVoices(
+  listeningBlocks: { script?: { speaker?: string; text?: string }[] }[],
+  voiceMap: Record<string, VoiceMapEntry>,
+  onProgress?: (stage: 'downloading' | 'synthesizing', progress: number, message: string) => void,
+  forcedModel?: TtsModelType,
+): Promise<void> {
+  const modelType = forcedModel || getTtsModelPreference();
+  if (modelType === 'webspeech') {
+    onProgress?.('synthesizing', 100, 'Using Web Speech API (0 MB download).');
+    return;
+  }
+
+  const modelInfo = TTS_MODELS[modelType] || TTS_MODELS['kokoro-fp32'];
+
+  // Step 1: Download model weights
+  onProgress?.('downloading', 0, `Downloading ${modelInfo.name} weights (${modelInfo.downloadSize})...`);
+  await downloadAudioModelOnce((pct, msg) => {
+    onProgress?.('downloading', pct, msg);
+  }, modelType);
+
+  // Step 2: Regenerate audio clips
+  const validBlocks = (listeningBlocks || []).filter(
+    (b) => Array.isArray(b?.script) && b.script.length > 0,
+  );
+
+  let totalLines = 0;
+  validBlocks.forEach((b) => {
+    totalLines += (b.script || []).filter((s) => s && s.text && s.text.trim().length > 0).length;
+  });
+
+  let processed = 0;
+
+  for (let bIdx = 0; bIdx < validBlocks.length; bIdx++) {
+    const block = validBlocks[bIdx]!;
+    const partNum = bIdx + 1;
+    const cleanScript = (block.script || [])
+      .filter((s) => s && s.text && s.text.trim().length > 0)
+      .map((s) => ({ speaker: s.speaker, text: s.text }));
+
+    await pregenerateListeningAudio(
+      cleanScript,
+      partNum,
+      voiceMap,
+      (done, _partTotal, snippet) => {
+        processed++;
+        const pct = totalLines > 0 ? Math.round((processed / totalLines) * 100) : 100;
+        onProgress?.(
+          'synthesizing',
+          pct,
+          `Part ${partNum} (${done}/${cleanScript.length}): "${snippet.slice(0, 24)}..."`,
+        );
+      },
+      modelType,
+    );
+  }
+
+  onProgress?.('synthesizing', 100, 'All listening voice tracks synthesized and cached offline!');
+}
+
+/**
  * Synthesize speech audio using the active TTS model, with automatic IndexedDB caching.
  * Returns an audio/wav Blob ready for playback.
  */
@@ -335,10 +569,7 @@ export async function synthesizeSpeechAudio(
     return new Blob([], { type: 'audio/wav' });
   }
 
-  const modelInfo = TTS_MODELS[modelId] || TTS_MODELS['kokoro-fp32'];
-  const targetDtype = modelInfo.dtype || 'fp32';
-
-  const cacheKey = `kokoro_${targetDtype}_${voiceId}_${speed.toFixed(2)}_${simpleHash(clean)}`;
+  const cacheKey = getAudioClipCacheKey(clean, voiceId, speed, modelId);
   const cached = await getCachedAudioBlob(cacheKey);
   if (cached && cached.size > 0) {
     return cached;

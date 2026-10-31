@@ -22,11 +22,13 @@ import { CONVERSATIONAL_LISTENING_BLOCK } from '../lib/sample-material.ts';
 import {
   pregenerateListeningAudio,
   getTtsModelPreference,
+  checkTestAudioCacheStatus,
   TTS_MODELS,
   type TtsModelType,
 } from '../lib/audio-manager.ts';
 import { randomizeVoiceMap } from '../lib/voices.ts';
 import { TtsSettingsModal } from './tts-settings-modal.tsx';
+import { RegenerateAudioModal } from './regenerate-audio-modal.tsx';
 import { Button } from './ui/button.tsx';
 import type { ErrorCode, PrepJob, Scope, TestData } from '../lib/types.ts';
 
@@ -142,6 +144,17 @@ export function Preparation({
   const [pipelineStepMessage, setPipelineStepMessage] = useState<string>('');
   const [showAiModal, setShowAiModal] = useState(false);
   const [showHwSpecsModal, setShowHwSpecsModal] = useState(false);
+  const [regenModalState, setRegenModalState] = useState<{
+    isOpen: boolean;
+    cachedLines: number;
+    totalLines: number;
+    isModelCached: boolean;
+  }>({
+    isOpen: false,
+    cachedLines: 0,
+    totalLines: 0,
+    isModelCached: true,
+  });
   const [currentTtsModel, setCurrentTtsModel] = useState<TtsModelType>(getTtsModelPreference);
   const [providerConfig, setProviderConfig] = useState<ProviderConfig>(loadProviderConfig);
   const [elapsedSeconds, setElapsedSeconds] = useState(0);
@@ -604,6 +617,31 @@ export function Preparation({
   const handleStartPracticeNow = () =>
     guard('start', async () => {
       if (!record || !onOpenPractice) return;
+
+      const listeningBlocks = record.data.listening || [];
+      const hasListeningScript = listeningBlocks.some(
+        (b) => Array.isArray(b?.script) && b.script.length > 0,
+      );
+
+      if (hasListeningScript) {
+        const vMap = record.voice_map || randomizeVoiceMap();
+        if (!record.voice_map) {
+          record.voice_map = vMap;
+          writeRecord(record);
+        }
+
+        const cacheStatus = await checkTestAudioCacheStatus(listeningBlocks, vMap);
+        if (cacheStatus.missingVoices) {
+          setRegenModalState({
+            isOpen: true,
+            cachedLines: cacheStatus.cachedLines,
+            totalLines: cacheStatus.totalLines,
+            isModelCached: cacheStatus.isModelCached,
+          });
+          return;
+        }
+      }
+
       const started = await startAttempt({
         attemptId: record.id,
         expectedRevision: record.revision,
@@ -611,6 +649,17 @@ export function Preparation({
       const updated = await loadAttempt(record.id);
       onOpenPractice({ ...updated, revision: started.revision, data: started.data });
     });
+
+  const handleRegenModalComplete = async () => {
+    setRegenModalState((prev) => ({ ...prev, isOpen: false }));
+    if (!record || !onOpenPractice) return;
+    const started = await startAttempt({
+      attemptId: record.id,
+      expectedRevision: record.revision,
+    });
+    const updated = await loadAttempt(record.id);
+    onOpenPractice({ ...updated, revision: started.revision, data: started.data });
+  };
 
   // ─── Manual Fallback Handlers ───
 
@@ -1589,6 +1638,18 @@ export function Preparation({
         isOpen={showHwSpecsModal}
         onClose={() => setShowHwSpecsModal(false)}
         onModelChanged={(m) => setCurrentTtsModel(m)}
+      />
+
+      {/* Missing Audio Cache & Regeneration Modal */}
+      <RegenerateAudioModal
+        isOpen={regenModalState.isOpen}
+        onClose={() => setRegenModalState((prev) => ({ ...prev, isOpen: false }))}
+        onComplete={handleRegenModalComplete}
+        listeningBlocks={record?.data.listening || []}
+        voiceMap={record?.voice_map || randomizeVoiceMap()}
+        cachedLines={regenModalState.cachedLines}
+        totalLines={regenModalState.totalLines}
+        isModelCached={regenModalState.isModelCached}
       />
 
       <style>{`

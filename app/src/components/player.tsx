@@ -15,6 +15,9 @@ import { VisualRenderer, MapPlanLabellingRenderer, extractPlaceName } from './vi
 import { ListeningAudioPlayer } from './listening-audio-player.tsx';
 import { Button } from './ui/button.tsx';
 import { ConfirmationModal } from './ui/confirmation-modal.tsx';
+import { RegenerateAudioModal } from './regenerate-audio-modal.tsx';
+import { checkTestAudioCacheStatus } from '../lib/audio-manager.ts';
+import { randomizeVoiceMap } from '../lib/voices.ts';
 import { SpeakingSection } from './speaking-section.tsx';
 
 const SECTION_LABELS = ['Listening', 'Reading', 'Writing', 'Speaking'] as const;
@@ -129,9 +132,46 @@ export function Player({
   const [group, setGroup] = useState(0);
   const [notesOpen, setNotesOpen] = useState(false);
   const [showForfeitModal, setShowForfeitModal] = useState(false);
+  const [regenModalState, setRegenModalState] = useState<{
+    isOpen: boolean;
+    cachedLines: number;
+    totalLines: number;
+    isModelCached: boolean;
+  }>({
+    isOpen: false,
+    cachedLines: 0,
+    totalLines: 0,
+    isModelCached: true,
+  });
   const [selectedMapQuestionId, setSelectedMapQuestionId] = useState<string | null>(null);
   const sessionRef = useRef(session);
   sessionRef.current = session;
+
+  useEffect(() => {
+    let cancelled = false;
+    const checkAudio = async () => {
+      const listeningBlocks = attempt.data.listening || [];
+      const hasListeningScript = listeningBlocks.some(
+        (b) => Array.isArray(b?.script) && b.script.length > 0,
+      );
+      if (hasListeningScript) {
+        const vMap = attempt.voice_map || randomizeVoiceMap();
+        const status = await checkTestAudioCacheStatus(listeningBlocks, vMap);
+        if (!cancelled && status.missingVoices) {
+          setRegenModalState({
+            isOpen: true,
+            cachedLines: status.cachedLines,
+            totalLines: status.totalLines,
+            isModelCached: status.isModelCached,
+          });
+        }
+      }
+    };
+    void checkAudio();
+    return () => {
+      cancelled = true;
+    };
+  }, [attempt]);
 
   const availableSections = useMemo(() => {
     const list: { phase: number; key: string; label: string; count: number; partLabel: string }[] = [];
@@ -1445,6 +1485,18 @@ export function Player({
         iconColor="#b91c1c"
         loading={busy}
         warningNote="Your timed attempt will end immediately and cannot be resumed."
+      />
+
+      {/* Missing Audio Cache & Regeneration Modal */}
+      <RegenerateAudioModal
+        isOpen={regenModalState.isOpen}
+        onClose={() => setRegenModalState((prev) => ({ ...prev, isOpen: false }))}
+        onComplete={() => setRegenModalState((prev) => ({ ...prev, isOpen: false }))}
+        listeningBlocks={attempt.data.listening || []}
+        voiceMap={attempt.voice_map || randomizeVoiceMap()}
+        cachedLines={regenModalState.cachedLines}
+        totalLines={regenModalState.totalLines}
+        isModelCached={regenModalState.isModelCached}
       />
     </main>
   );

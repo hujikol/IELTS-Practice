@@ -4,9 +4,13 @@ import {
   TTS_MODELS,
   getTtsModelPreference,
   setTtsModelPreference,
+  getTtsDevicePreference,
+  setTtsDevicePreference,
   isAudioModelCached,
   downloadAudioModelOnce,
   synthesizeSpeechAudio,
+  getAudioClipCacheKey,
+  checkTestAudioCacheStatus,
   type TtsModelType,
 } from '../src/lib/audio-manager.ts';
 
@@ -80,4 +84,48 @@ test('synthesizeSpeechAudio returns an empty blob for empty text or webspeech', 
   const webSpeechRes = await synthesizeSpeechAudio('Hello candidate', 'af_heart', 1.0, 'webspeech');
   assert.equal(webSpeechRes.size, 0, 'webspeech returns empty blob for browser fallback');
 });
+
+test('getAudioClipCacheKey produces deterministic cache keys with model precision and voice', () => {
+  const key1 = getAudioClipCacheKey('Hello world', 'af_heart', 1.0, 'kokoro-fp16');
+  const key2 = getAudioClipCacheKey('Hello world', 'af_heart', 1.0, 'kokoro-fp16');
+  const keyFp32 = getAudioClipCacheKey('Hello world', 'af_heart', 1.0, 'kokoro-fp32');
+
+  assert.equal(key1, key2, 'identical input must produce identical key');
+  assert.ok(key1.startsWith('kokoro_fp16_af_heart_1.00_'), 'must include dtype and voice');
+  assert.ok(keyFp32.startsWith('kokoro_fp32_af_heart_1.00_'), 'must differentiate dtype');
+});
+
+test('checkTestAudioCacheStatus accurately reports missing audio when cache is cleared', async () => {
+  // Test with webspeech -> never missing
+  const wsStatus = await checkTestAudioCacheStatus(
+    [{ script: [{ speaker: 'woman', text: 'Good morning, how can I help you?' }] }],
+    {},
+    'webspeech',
+  );
+  assert.equal(wsStatus.missingVoices, false);
+
+  // Test with neural model when clips are not in IndexedDB -> missingVoices is true
+  const neuralStatus = await checkTestAudioCacheStatus(
+    [{ script: [{ speaker: 'woman', text: 'Good morning, how can I help you today at the sports centre?' }] }],
+    {},
+    'kokoro-fp16',
+  );
+  assert.equal(neuralStatus.totalLines, 1);
+  assert.equal(neuralStatus.cachedLines, 0);
+  assert.equal(neuralStatus.missingVoices, true);
+});
+
+test('getTtsDevicePreference defaults to webgpu and setTtsDevicePreference toggles to cpu and persists', () => {
+  // Must default to webgpu
+  assert.equal(getTtsDevicePreference(), 'webgpu', 'TTS compute must default to webgpu');
+
+  // Change to cpu
+  setTtsDevicePreference('cpu');
+  assert.equal(getTtsDevicePreference(), 'cpu', 'Should toggle to cpu compute');
+
+  // Switch back to webgpu
+  setTtsDevicePreference('webgpu');
+  assert.equal(getTtsDevicePreference(), 'webgpu', 'Should toggle back to webgpu compute');
+});
+
 
