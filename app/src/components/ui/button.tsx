@@ -195,6 +195,11 @@ export const Button = React.forwardRef<HTMLButtonElement, ButtonProps>(function 
           background-color: #f1f5f9 !important;
           color: #0f172a !important;
         }
+        .ui-btn-delete:not(:disabled):hover {
+          background-color: #fff1f2 !important;
+          border-color: #fecdd3 !important;
+          color: #be123c !important;
+        }
         .ui-btn-success:not(:disabled):hover {
           background-color: #047857 !important;
           border-color: #065f46 !important;

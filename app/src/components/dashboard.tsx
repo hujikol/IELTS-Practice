@@ -11,6 +11,7 @@ import { emptyTest } from '../lib/material.ts';
 import { loadProviderConfig, type ProviderConfig } from '../lib/providers.ts';
 import { ieltsBandToCefr } from '../lib/bands.ts';
 import { AiConnectionModal, AiConnectionStatusPill } from './ai-connection.tsx';
+import { DeleteTestModal } from './delete-test-modal.tsx';
 import { Button } from './ui/button.tsx';
 import type { Scope } from '../lib/types.ts';
 
@@ -141,16 +142,24 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
     }
   };
 
-  const handleDelete = async (id: string, e: React.MouseEvent) => {
+  const [deleteTarget, setDeleteTarget] = useState<AttemptSummary | null>(null);
+  const [isDeleting, setIsDeleting] = useState(false);
+
+  const handleDeleteClick = (summary: AttemptSummary, e: React.MouseEvent) => {
     e.stopPropagation();
-    if (!window.confirm('Are you sure you want to delete this test? This action cannot be undone.')) {
-      return;
-    }
+    setDeleteTarget(summary);
+  };
+
+  const handleConfirmDelete = async (id: string) => {
+    setIsDeleting(true);
     try {
       await deleteAttempt(id);
+      setDeleteTarget(null);
       await refresh();
     } catch {
       setError('Could not delete test.');
+    } finally {
+      setIsDeleting(false);
     }
   };
 
@@ -641,8 +650,9 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                         variant="ghost"
                         size="sm"
                         icon="🗑️"
-                        onClick={(e) => handleDelete(t.id, e)}
-                        title="Delete test permanently"
+                        className="ui-btn-delete"
+                        onClick={(e) => handleDeleteClick(t, e)}
+                        title="Delete in-progress test permanently"
                       >
                         Delete
                       </Button>
@@ -849,8 +859,9 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                           variant="ghost"
                           size="sm"
                           icon="🗑️"
-                          onClick={(e) => handleDelete(t.id, e)}
-                          title="Delete test permanently"
+                          className="ui-btn-delete"
+                          onClick={(e) => handleDeleteClick(t, e)}
+                          title="Delete test record permanently"
                         >
                           Delete
                         </Button>
@@ -863,6 +874,17 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
           )}
         </section>
       </main>
+
+      {/* Standardized Delete Confirmation Modal */}
+      <DeleteTestModal
+        test={deleteTarget}
+        isOpen={deleteTarget !== null}
+        onClose={() => {
+          if (!isDeleting) setDeleteTarget(null);
+        }}
+        onConfirm={handleConfirmDelete}
+        loading={isDeleting}
+      />
     </div>
   );
 }

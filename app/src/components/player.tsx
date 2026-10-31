@@ -14,6 +14,8 @@ import { countWords, publicTest, type QuestionGroup } from '../lib/types.ts';
 import { VisualRenderer, MapPlanLabellingRenderer, extractPlaceName } from './visual-renderer.tsx';
 import { ListeningAudioPlayer } from './listening-audio-player.tsx';
 import { Button } from './ui/button.tsx';
+import { ConfirmationModal } from './ui/confirmation-modal.tsx';
+import { SpeakingSection } from './speaking-section.tsx';
 
 const SECTION_LABELS = ['Listening', 'Reading', 'Writing', 'Speaking'] as const;
 
@@ -1089,113 +1091,24 @@ export function Player({
         </div>
       )}
 
-      {/* 2-Section Split Layout for Speaking */}
-      {phase === 3 && view.speaking[index] && (
-        <div
-          className="ielts-split-container"
-          style={{
-            flex: 1,
-            minHeight: 0,
-            display: 'grid',
-            gridTemplateColumns: 'minmax(0, 1fr) minmax(0, 1fr)',
-            width: '100%',
-            overflow: 'hidden',
-          }}
-        >
-          <section
-            aria-label="Speaking prompt"
-            className="ielts-split-left ielts-pane-scroll"
-            style={{
-              height: '100%',
-              overflowY: 'auto',
-              padding: '24px 32px',
-              borderRight: '1px solid #e2e8f0',
-              backgroundColor: '#ffffff',
-              boxSizing: 'border-box',
+      {/* Interactive Speaking Interview with Real Voice Recording */}
+      {phase === 3 && (
+        <div style={{ flex: 1, minHeight: 0, height: '100%', overflowY: 'auto', backgroundColor: '#f8fafc' }}>
+          <SpeakingSection
+            attemptId={attempt.id}
+            speakingParts={attempt.data.speaking || []}
+            initialMode={attempt.mode === 'timed' ? 'timed' : 'untimed'}
+            initialNotes={data.notes}
+            onSaveAnswers={(transcripts) => {
+              edit({
+                speakingTexts: transcripts,
+              });
             }}
-          >
-            <h2 style={{ marginTop: 0, fontSize: '1.4rem', color: '#0f172a', fontWeight: 800 }}>
-              Speaking Part {view.speaking[index].part}
-            </h2>
-            <p style={{ lineHeight: 1.7, color: '#334155', fontSize: '1rem' }}>
-              {view.speaking[index].prompt}
-            </p>
-            {view.speaking[index].cue?.length ? (
-              <div
-                style={{
-                  backgroundColor: '#f8fafc',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '8px',
-                  padding: '16px 20px',
-                  margin: '16px 0',
-                }}
-              >
-                <strong style={{ color: '#0f172a', display: 'block', marginBottom: 8 }}>
-                  You should say:
-                </strong>
-                <ul style={{ margin: 0, paddingLeft: 20, color: '#334155', lineHeight: 1.6 }}>
-                  {view.speaking[index].cue?.map((c, i) => (
-                    <li key={i}>{c}</li>
-                  ))}
-                </ul>
-              </div>
-            ) : null}
-            {view.speaking[index].questions?.length ? (
-              <div style={{ marginTop: 16 }}>
-                <strong style={{ color: '#0f172a', display: 'block', marginBottom: 8 }}>
-                  Discussion Questions:
-                </strong>
-                <ol style={{ paddingLeft: 20, color: '#334155', lineHeight: 1.6 }}>
-                  {view.speaking[index].questions?.map((q, i) => (
-                    <li key={i} style={{ marginBottom: 6 }}>{q}</li>
-                  ))}
-                </ol>
-              </div>
-            ) : null}
-          </section>
-
-          <section
-            aria-label="Speaking practice reflection"
-            className="ielts-split-right ielts-pane-scroll"
-            style={{
-              height: '100%',
-              overflowY: 'auto',
-              padding: '24px 32px',
-              backgroundColor: '#ffffff',
-              display: 'flex',
-              flexDirection: 'column',
-              boxSizing: 'border-box',
+            onFinish={() => {
+              void finish();
             }}
-          >
-            <label htmlFor="speaking-notes" style={{ fontWeight: 700, fontSize: '1rem', color: '#0f172a', marginBottom: 10 }}>
-              Your Notes or Reflection:
-            </label>
-            <textarea
-              id="speaking-notes"
-              rows={16}
-              placeholder="Draft your key speaking points or reflection..."
-              style={{
-                width: '100%',
-                flex: 1,
-                minHeight: '260px',
-                padding: '14px 16px',
-                borderRadius: '8px',
-                border: '1px solid #cbd5e1',
-                fontSize: '1rem',
-                lineHeight: 1.6,
-                fontFamily: 'system-ui, -apple-system, sans-serif',
-                resize: 'none',
-                boxSizing: 'border-box',
-                outline: 'none',
-              }}
-              value={data.speakingTexts[index] ?? ''}
-              onChange={(e) => {
-                const speakingTexts = [...data.speakingTexts];
-                speakingTexts[index] = e.target.value;
-                edit({ speakingTexts });
-              }}
-            />
-          </section>
+            onExit={onExit}
+          />
         </div>
       )}
 
@@ -1292,7 +1205,7 @@ export function Player({
       )}
 
       {/* Floating Notes Toggle on bottom-right if notes drawer is closed */}
-      {!notesOpen && (
+      {phase !== 3 && !notesOpen && (
         <button
           type="button"
           onClick={() => setNotesOpen(true)}
@@ -1334,9 +1247,10 @@ export function Player({
         </button>
       )}
 
-      {/* Sticky Bottom Navigation Bar */}
-      <footer
-        role="region"
+      {/* Sticky Bottom Navigation Bar (Hidden during interactive Speaking interview) */}
+      {phase !== 3 && (
+        <footer
+          role="region"
         aria-label="Test navigation and question jump"
         style={{
           flexShrink: 0,
@@ -1513,84 +1427,25 @@ export function Player({
           )}
         </div>
       </footer>
+      )}
 
       {/* Forfeit Confirmation Modal */}
-      {showForfeitModal && (
-        <div
-          role="dialog"
-          aria-modal="true"
-          aria-labelledby="forfeit-title"
-          style={{
-            position: 'fixed',
-            inset: 0,
-            backgroundColor: 'rgba(15, 23, 42, 0.65)',
-            backdropFilter: 'blur(3px)',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            zIndex: 1000,
-            padding: '16px',
-          }}
-        >
-          <div
-            style={{
-              backgroundColor: '#ffffff',
-              borderRadius: '16px',
-              padding: '24px 28px',
-              maxWidth: '460px',
-              width: '100%',
-              boxShadow: '0 20px 25px -5px rgba(0, 0, 0, 0.1), 0 10px 10px -5px rgba(0, 0, 0, 0.04)',
-              border: '1px solid #e2e8f0',
-            }}
-          >
-            <div style={{ display: 'flex', alignItems: 'center', gap: '12px', marginBottom: '12px' }}>
-              <span
-                style={{
-                  display: 'inline-flex',
-                  alignItems: 'center',
-                  justifyContent: 'center',
-                  width: '36px',
-                  height: '36px',
-                  borderRadius: '50%',
-                  backgroundColor: '#fee2e2',
-                  color: '#b91c1c',
-                  fontSize: '18px',
-                  fontWeight: 700,
-                }}
-              >
-                ⚠️
-              </span>
-              <h3 id="forfeit-title" style={{ margin: 0, fontSize: '1.2rem', color: '#0f172a', fontWeight: 800 }}>
-                Forfeit Timed Test?
-              </h3>
-            </div>
-            <p style={{ fontSize: '0.92rem', color: '#475569', lineHeight: 1.5, margin: '0 0 20px' }}>
-              Are you sure you want to forfeit this timed examination? The timer will be stopped immediately, and your
-              current answers will be submitted for scoring and diagnostic feedback.
-            </p>
-            <div style={{ display: 'flex', justifyContent: 'flex-end', gap: '10px' }}>
-              <Button
-                variant="outline"
-                size="md"
-                onClick={() => setShowForfeitModal(false)}
-                disabled={busy}
-              >
-                Cancel
-              </Button>
-              <Button
-                variant="danger"
-                size="md"
-                icon="⚠️"
-                onClick={() => void handleForfeit()}
-                disabled={busy}
-                loading={busy}
-              >
-                Confirm & Forfeit
-              </Button>
-            </div>
-          </div>
-        </div>
-      )}
+      <ConfirmationModal
+        isOpen={showForfeitModal}
+        onClose={() => setShowForfeitModal(false)}
+        onConfirm={() => void handleForfeit()}
+        title="Forfeit Timed Test?"
+        description="Are you sure you want to forfeit this timed examination? The timer will be stopped immediately, and your current answers will be submitted for scoring and diagnostic feedback."
+        confirmLabel="Confirm & Forfeit"
+        cancelLabel="Continue Test"
+        confirmVariant="danger"
+        confirmIcon="⚠️"
+        icon="⚠️"
+        iconBgColor="#fee2e2"
+        iconColor="#b91c1c"
+        loading={busy}
+        warningNote="Your timed attempt will end immediately and cannot be resumed."
+      />
     </main>
   );
 }

@@ -83,6 +83,22 @@ export type WritingTask = {
 
 export type SpeakingPart = { part: number; prompt: string; questions?: string[]; cue?: string[] };
 
+export type SpeakingMode = 'practice' | 'exam';
+
+export type SpeakingClip = {
+  attempt_id: string;
+  test_id?: string;
+  part: number; // 0 (intro), 1, 2, 3
+  question_id: string;
+  take: number;
+  duration_s: number;
+  started_at: number;
+  ended_at: number;
+  end_reason: 'learner_next' | 'silence' | 'hard_cap' | 'timer';
+  transcript?: string;
+  blob?: Blob;
+};
+
 export type PrepJob = { key: string; label: string; section: Scope; part: number };
 
 export type Wrong = {

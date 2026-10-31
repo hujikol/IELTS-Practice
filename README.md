@@ -10,16 +10,18 @@ The project has completed its core architecture migration from legacy cloud/desk
 
 | Milestone / Feature | Status | Notes |
 |---|---|---|
-| **Core Architecture & Storage** | ✅ Complete | Browser-native durable storage (`localStorage`), revision conflict protection, atomic transactions. |
+| **Core Architecture & Storage** | ✅ Complete | Browser-native durable storage (`localStorage` & `IndexedDB`), atomic transactions, revision conflict protection. |
 | **Material Generation & Validation** | ✅ Complete | Full mock tests (`l1-l4`, `r1-r3`, `w1-w2`, `s1-s3`) & focused modules with strict schema validation. |
 | **AI Provider Layer** | ✅ Complete | Compatible with OpenAI, OpenRouter, Experiential Labs, local Ollama/LM Studio, and 100% offline manual copy/paste mode. |
 | **Listening Module & Audio** | ✅ Complete | In-browser Kokoro neural TTS, distinct British/American/Australian voices, pause/resume queue handling, strict timed exam 1-play mode. |
 | **Interactive Map & Plan Labelling** | ✅ Complete | Architectural SVG vector map, HTML5 drag-and-drop & click-to-place, clean place-name extraction, bi-directional question syncing. |
 | **Reading Academic Module** | ✅ Complete | Authentic word window constraints (720–910 words), TFNG, YNNG, multiple choice, matching headings, summary gaps. |
-| **Writing & Speaking Modules** | ✅ Complete | Task 1 vector visuals (process, line, bar, map comparison) & Task 2 essay capture with word counting; Speaking prompts & cue cards. |
+| **Writing Module** | ✅ Complete | Task 1 vector visuals (process, line, bar, map comparison) & Task 2 essay capture with live word counter and benchmark comparisons. |
+| **Interactive Speaking Section** | ✅ Complete | 1-on-1 voice interview with real-time mic recording, VAD silence auto-advance, Cambridge Cue Card layout, 60s prep & 2:00 speaking timers. |
 | **Scoring & Verification Engine** | ✅ Complete | Hard Rule: code computes all numbers. Verbatim substring quote verification for AI feedback. Empty response protection. |
 | **CEFR Level & Band Reporting** | ✅ Complete | Official IELTS-to-CEFR concordance (C2 Mastery down to A1), executive dashboard analytics, completed test history. |
-| **Test Suite & Verification** | ✅ Complete | 457 automated tests passing (`npm test`), strict TypeScript typechecking, zero ESLint warnings. |
+| **UI/UX & Design System (/web-uix)** | ✅ Complete | Accessible Royal Blue educational palette, standardized button hierarchy with tactile elevations, responsive fixed-viewport layouts. |
+| **Test Suite & Verification** | ✅ Complete | 461 automated tests passing (`npm test`), strict TypeScript typechecking, zero ESLint warnings, production build verified. |
 
 ---
 
@@ -36,35 +38,42 @@ The project has completed its core architecture migration from legacy cloud/desk
 
 ## 🌟 Key Features
 
-### 1. Exam Simulation Player
-- **Timed and Untimed Modes**: Practice with realistic countdown clocks or at your own pace without time pressure.
+### 1. Interactive Speaking Interview (Voice Recording & 1-on-1 Flow)
+- **Two Operating Modes**:
+  - **∞ Practice Mode**: Unlimited time, visible question text, replayable examiner audio, re-recording permitted, live transcript preview, notes allowed in all parts.
+  - **⏱ Exam Simulation**: Authentic 11–14 min interview, audio-only questions (text hidden), single take, strict 60s prep countdown and 2:00 auto-stop timer, VAD silence auto-advance, max 1 repeat request (*"Could you repeat that?"*).
+- **Conversational State Machine**:
+  - `MIC_CHECK`: Web Audio API `AnalyserNode` live input level meter with 3-second sample test clip and playback verification.
+  - `INTRO`: Examiner greeting, candidate name verification, and ID check.
+  - `PART 1`: 3 topic frames (e.g. work/study, hometown, hobbies) with short questions asked one at a time.
+  - `PART 2`: Official Cambridge Cue Card rendering with topic title, 3 *"You should say:"* bullet points, 60-second preparation countdown with scratchpad drafting, and 2-minute individual long turn.
+  - `PART 3`: Abstract, society-level analytical discussion questions thematically linked to Part 2.
+- **Recording & Audio Engine**:
+  - `MediaRecorder` capture with `audio/webm;codecs=opus` (with MP4 fallback) and chunked IndexedDB persistence (`ielts_studio_speaking_db`).
+  - Voice Activity Detection (VAD) via RMS thresholds for exam auto-advance (3s silence in Part 1, 4s in Part 3).
+  - Dual-engine examiner TTS: Kokoro neural TTS + Web Speech API fallback.
+  - Live verbatim candidate transcription via native Web Speech API.
+
+### 2. Streamlined Dashboard & Performance Analytics
+- **Practice Launcher**: 5 clear focus cards (Full Mock, Listening, Reading, Writing, Speaking) with a 1-click segmented timing switch (`∞ Self-Paced` vs `⏱ Exam Timed`).
+- **Contextual Shortcuts**: Quick 1-click launch for 2-Way Conversational Dialogue with Kokoro FP32 neural voices.
+- **Executive Proficiency Overview**: Highlights current Best Band, CEFR Level badge (`C2`, `C1`, `B2`, etc.), latest exam score, and category averages.
+- **Scannable Test History**: Clean rows showing test title, completion timestamp, timing mode, color-coded skill chips (`🎧 7.5`, `📖 8.0`, `✍️ 6.5`, `🗣️ 7.0`), Overall Band, and CEFR indicator.
+- **Destructive Action Safety**: Confirmation modal and soft rose hover styling for delete actions (`#fff1f2`, `#be123c`, `#fecdd3`).
+
+### 3. Diagnostic Review Screen & 7-Day Action Plan
+- **Cohesive Educational Diagnostic Card**: Clean, high-contrast white card with soft Royal Blue accents replacing harsh dark banners.
+- **Adaptive Tabs**: Dynamically filters to display only attempted sections (Overview & Plan, Listening, Reading, Writing, Speaking).
+- **Unified Overview Hub**: Combines Top Priority Weaknesses (ranked by score impact with actionable fix bullets), Verified Strengths (≥85% accuracy), and the interactive 7-Day Improvement Plan with persistent checkboxes and 1-click `Launch Drill` triggers.
+- **Enhanced Question Review**: Question stem context, clear answer comparisons (`Your answer` vs `Correct answer`), and a unified analysis container with source quotes, Cambridge distractor elimination, personal diagnostic notes, and strategy tips.
+
+### 4. Exam Simulation Player
+- **Fixed Viewport & Scroll Locking**: Pinned top header and bottom navigation; only the middle passage and question split-panes scroll independently.
 - **Opposite-Side Navigation**:
-  - **Left Sidebar**: Sticky question navigator displaying progress (`Answered X / Y`) and amber indicators for flagged items (`⚑`).
-  - **Center Canvas**: Main reading passage, listening audio player, vector visuals, and question groups.
-  - **Right Drawer**: Floating auto-saving scratchpad notes with live word counting, toggled via header or floating pill.
-- **Exam Listening Audio**:
-  - Neural text-to-speech engine powered by Kokoro ONNX.
-  - Monologues and dialogues with character voices and neutral narration.
-  - In timed mode: Audio is strictly playable once (`1/1`) and transcripts remain hidden throughout the test.
-
-### 2. Interactive Drag & Drop Map / Plan Labelling
-- Vector SVG architectural maps with Entrance marker, Compass Rose, and drop pins (`A` through `H`).
-- Place names are cleanly parsed (e.g., `Gift shop`, `Picnic area`) rather than showing full question text.
-- Redundant question lists below map questions are omitted in favor of intuitive direct-on-map interactions.
-
-### 3. Diagnostic Scoring & 7-Day Action Plan
-- **Detailed Review**: Item-by-item breakdown with correct answers, explanations, and verbatim evidence quotes.
-- **Weakness Analysis**: Identifies top error patterns and high-impact skills (e.g., inference, qualifier words, paraphrase matching).
-- **7-Day Structured Plan**: Day-by-day drills and targeted technique reminders tailored to the candidate's diagnostic profile.
-
-### 4. Dashboard & CEFR History
-- **Executive Performance Metrics**:
-  - All-time highest band and current CEFR level.
-  - Latest test score and test count.
-  - Section-by-section averages across Listening, Reading, Writing, and Speaking.
-- **Completed Test History**:
-  - Clear summary cards for each test displaying the Overall Band and the CEFR badge (`C2`, `C1`, `B2`, `B1`, `A2`, `A1`).
-  - Grid showing all 4 IELTS category band scores with direct one-click review.
+  - Left Sidebar: Sticky question navigator with completion counters and flagged item indicators.
+  - Center Canvas: Reading passage, Kokoro listening audio player, vector visuals, and question groups.
+  - Right Drawer: Floating auto-saving scratchpad notes with live word counting.
+- **Interactive Drag & Drop Map / Plan Labelling**: Architectural SVG vector maps with Entrance marker, Compass Rose, drop pins (`A`–`H`), and clean place-name parsing.
 
 ---
 
@@ -72,10 +81,10 @@ The project has completed its core architecture migration from legacy cloud/desk
 
 - **Framework**: React 19, TypeScript
 - **Bundler & Tooling**: Vite, Rollup
-- **Audio / ML**: `@huggingface/transformers`, Kokoro ONNX WebAssembly
+- **Audio / ML**: Web Audio API (`AnalyserNode`), `MediaRecorder`, Kokoro ONNX WebAssembly, Web Speech API (`SpeechRecognition` & `SpeechSynthesis`)
 - **Testing**: Node.js native test runner (`node:test`, `node:assert/strict`)
 - **Linting & Types**: ESLint 9 (flat config), TypeScript (`tsc -b`)
-- **Storage**: Browser `localStorage` with memory fallback and recovery outbox
+- **Storage**: Browser `localStorage` & `IndexedDB` with memory fallback and recovery outbox
 
 ---
 
@@ -104,7 +113,7 @@ Open `http://localhost:5173` in your browser.
 
 ### Quality Verification
 ```bash
-# Run unit & integration tests (457 tests)
+# Run unit & integration tests (461 tests)
 pnpm test
 
 # Run TypeScript typecheck
@@ -126,14 +135,19 @@ IELTS_practice/
 ├── app/
 │   ├── src/
 │   │   ├── components/
-│   │   │   ├── dashboard.tsx             # Main dashboard, history & CEFR overview
+│   │   │   ├── dashboard.tsx             # Streamlined dashboard, history & CEFR overview
 │   │   │   ├── preparation.tsx           # Batch prompt generation & material import
-│   │   │   ├── player.tsx                # Active test player & opposite-side navigation
+│   │   │   ├── player.tsx                # Fixed-viewport test player & navigation
+│   │   │   ├── speaking-section.tsx      # Interactive 1-on-1 voice speaking interview
 │   │   │   ├── review.tsx                # Post-test scoring, feedback & 7-day plan
 │   │   │   ├── listening-audio-player.tsx# Kokoro TTS listening player
 │   │   │   ├── visual-renderer.tsx       # SVG vector charts & Drag & Drop Map
-│   │   │   └── ai-connection.tsx         # Provider configuration modal & status
+│   │   │   ├── ai-connection.tsx         # Provider configuration modal & status
+│   │   │   └── ui/
+│   │   │       ├── button.tsx            # Standardized button variants with intuitive icons
+│   │   │       └── confirmation-modal.tsx# Accessible confirmation dialogs
 │   │   └── lib/
+│   │       ├── speaking-recorder.ts      # Voice recording, AnalyserNode meter, VAD & IndexedDB
 │   │       ├── attempts.ts               # Local attempt storage & sanitization
 │   │       ├── bands.ts                  # IELTS band tables & CEFR concordance
 │   │       ├── assessment-coordinator.ts # Report compilation & objective scoring
@@ -141,13 +155,7 @@ IELTS_practice/
 │   │       ├── material.ts               # Schema validation & test data structures
 │   │       ├── providers.ts              # LLM integration & prompt orchestration
 │   │       └── types.ts                  # Domain models & utility functions
-│   ├── tests/                            # 457 automated unit & integration tests
+│   ├── tests/                            # 461 automated unit & integration tests
 │   └── package.json
 └── README.md
 ```
-
----
-
-## 📄 License
-
-MIT License. Designed and developed for IELTS Academic candidates.
