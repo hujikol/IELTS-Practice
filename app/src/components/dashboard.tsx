@@ -34,7 +34,7 @@ function formatCompletedDate(timestamp: number | undefined | null): string {
   try {
     const d = new Date(timestamp);
     if (isNaN(d.getTime())) return 'Recently completed';
-    return `Completed on ${d.toLocaleDateString()} at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
+    return `${d.toLocaleDateString([], { month: 'short', day: 'numeric', year: 'numeric' })} at ${d.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}`;
   } catch {
     return 'Recently completed';
   }
@@ -44,6 +44,44 @@ interface DashboardProps {
   onOpenAttempt: (id: string) => void;
   onStartPreparation: (attempt: AttemptRecord) => void;
 }
+
+const MODULE_OPTIONS = [
+  {
+    scope: 'full' as Scope,
+    title: 'Full Mock Test',
+    desc: 'All 4 modules (Listening, Reading, Writing, Speaking)',
+    icon: '📚',
+    time: '~2h 45m',
+  },
+  {
+    scope: 'listening' as Scope,
+    title: 'Listening',
+    desc: '4 parts · 40 questions with neural audio',
+    icon: '🎧',
+    time: '30 mins',
+  },
+  {
+    scope: 'reading' as Scope,
+    title: 'Reading',
+    desc: '3 academic passages · 40 questions',
+    icon: '📖',
+    time: '60 mins',
+  },
+  {
+    scope: 'writing' as Scope,
+    title: 'Writing',
+    desc: 'Task 1 visual report & Task 2 essay',
+    icon: '✍️',
+    time: '60 mins',
+  },
+  {
+    scope: 'speaking' as Scope,
+    title: 'Speaking',
+    desc: '3-part interactive interview & cue card',
+    icon: '🗣️',
+    time: '14 mins',
+  },
+];
 
 export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps) {
   const [summaries, setSummaries] = useState<AttemptSummary[] | null>(null);
@@ -150,7 +188,7 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
   }, [completedTests]);
 
   return (
-    <div style={{ maxWidth: 1040, margin: '0 auto', padding: '32px 20px', fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", color: '#0f172a' }}>
+    <div style={{ maxWidth: 1040, margin: '0 auto', padding: '32px 20px 48px', fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", color: '#0f172a' }}>
       {/* Header Banner */}
       <header
         style={{
@@ -161,50 +199,53 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
           gap: 16,
           paddingBottom: 24,
           borderBottom: '1px solid #e2e8f0',
-          marginBottom: 32,
+          marginBottom: 28,
         }}
       >
-        <div>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
-            <span
-              style={{
-                width: 36,
-                height: 36,
-                borderRadius: 8,
-                background: '#0f172a',
-                color: '#ffffff',
-                display: 'flex',
-                alignItems: 'center',
-                justifyContent: 'center',
-                fontWeight: 800,
-                fontSize: '1.1rem',
-                letterSpacing: '-0.02em',
-              }}
-            >
-              IE
-            </span>
-            <h1 style={{ margin: 0, fontSize: '1.75rem', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
-              IELTS Studio
-            </h1>
-            <span
-              style={{
-                fontSize: '0.75rem',
-                fontWeight: 700,
-                padding: '3px 8px',
-                borderRadius: 9999,
-                background: '#f1f5f9',
-                color: '#475569',
-                border: '1px solid #cbd5e1',
-                textTransform: 'uppercase',
-                letterSpacing: '0.04em',
-              }}
-            >
-              Academic Practice
-            </span>
+        <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+          <span
+            style={{
+              width: 40,
+              height: 40,
+              borderRadius: 10,
+              background: 'linear-gradient(135deg, #1e40af 0%, #2563eb 100%)',
+              color: '#ffffff',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              fontWeight: 800,
+              fontSize: '1.2rem',
+              letterSpacing: '-0.02em',
+              boxShadow: '0 2px 8px rgba(37, 99, 235, 0.25)',
+            }}
+          >
+            IE
+          </span>
+          <div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <h1 style={{ margin: 0, fontSize: '1.5rem', fontWeight: 800, color: '#0f172a', letterSpacing: '-0.02em' }}>
+                IELTS Studio
+              </h1>
+              <span
+                style={{
+                  fontSize: '0.72rem',
+                  fontWeight: 700,
+                  padding: '2px 8px',
+                  borderRadius: 9999,
+                  background: '#eff6ff',
+                  color: '#1d4ed8',
+                  border: '1px solid #bfdbfe',
+                  textTransform: 'uppercase',
+                  letterSpacing: '0.04em',
+                }}
+              >
+                Academic Practice
+              </span>
+            </div>
+            <p style={{ margin: '4px 0 0 0', fontSize: '0.88rem', color: '#64748b' }}>
+              Private offline-first IELTS practice with neural voice synthesis &amp; code-verified scoring.
+            </p>
           </div>
-          <p style={{ margin: '6px 0 0 0', fontSize: '0.92rem', color: '#64748b' }}>
-            Private offline-first IELTS preparation with persistent local storage and automated test generation.
-          </p>
         </div>
 
         {/* AI Connection Status Pill Button */}
@@ -219,166 +260,323 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
       />
 
       {error && (
-        <div role="alert" style={{ background: '#fee2e2', border: '1px solid #fca5a5', color: '#991b1b', padding: '12px 16px', borderRadius: 8, marginBottom: 24 }}>
-          ⚠️ {error}
+        <div
+          role="alert"
+          style={{
+            background: '#fff1f2',
+            border: '1px solid #fecdd3',
+            color: '#be123c',
+            padding: '12px 16px',
+            borderRadius: 10,
+            marginBottom: 24,
+            fontSize: '0.9rem',
+            display: 'flex',
+            alignItems: 'center',
+            gap: 8,
+          }}
+        >
+          <span>⚠️</span>
+          <span>{error}</span>
         </div>
       )}
 
-      <main>
-        {/* Section 1: Create a Test */}
+      <main style={{ display: 'flex', flexDirection: 'column', gap: 28 }}>
+        {/* Performance Overview (Shown when completed tests exist) */}
+        {completedStats && (
+          <section
+            aria-labelledby="overview-heading"
+            style={{
+              background: '#ffffff',
+              border: '1px solid #e2e8f0',
+              borderRadius: 16,
+              padding: '20px 24px',
+              boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+            }}
+          >
+            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 16, marginBottom: 16 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 20, flexWrap: 'wrap' }}>
+                <div>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block' }}>
+                    Best Estimated Band
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 4 }}>
+                    <span style={{ fontSize: '2.1rem', fontWeight: 900, color: '#0f172a', lineHeight: 1 }}>
+                      {completedStats.bestBand ? completedStats.bestBand.toFixed(1) : '—'}
+                    </span>
+                    {completedStats.bestCefr && (
+                      <span
+                        style={{
+                          padding: '3px 8px',
+                          borderRadius: 6,
+                          fontSize: '0.75rem',
+                          fontWeight: 800,
+                          backgroundColor: completedStats.bestCefr.badgeStyle.bg,
+                          color: completedStats.bestCefr.badgeStyle.text,
+                          border: `1px solid ${completedStats.bestCefr.badgeStyle.border}`,
+                        }}
+                      >
+                        CEFR {completedStats.bestCefr.level} · {completedStats.bestCefr.name.split(' ')[0]}
+                      </span>
+                    )}
+                  </div>
+                </div>
+
+                <div style={{ width: 1, height: 42, backgroundColor: '#e2e8f0' }} aria-hidden="true" />
+
+                <div>
+                  <span style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', display: 'block' }}>
+                    Latest Exam Band
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 4 }}>
+                    <span style={{ fontSize: '1.6rem', fontWeight: 800, color: '#2563eb', lineHeight: 1 }}>
+                      {completedStats.latestBand ? completedStats.latestBand.toFixed(1) : '—'}
+                    </span>
+                    <span style={{ fontSize: '0.8rem', color: '#64748b' }}>
+                      ({completedStats.count} test{completedStats.count > 1 ? 's' : ''} total)
+                    </span>
+                  </div>
+                </div>
+              </div>
+
+              {/* Category Averages Row */}
+              <div
+                style={{
+                  display: 'flex',
+                  gap: 12,
+                  flexWrap: 'wrap',
+                  background: '#f8fafc',
+                  padding: '8px 14px',
+                  borderRadius: 10,
+                  border: '1px solid #e2e8f0',
+                }}
+              >
+                <div style={{ fontSize: '0.82rem', color: '#334155' }}>
+                  🎧 Listening <strong>{completedStats.avgListening ? `Band ${completedStats.avgListening}` : '—'}</strong>
+                </div>
+                <div style={{ width: 1, height: 16, backgroundColor: '#cbd5e1', alignSelf: 'center' }} aria-hidden="true" />
+                <div style={{ fontSize: '0.82rem', color: '#334155' }}>
+                  📖 Reading <strong>{completedStats.avgReading ? `Band ${completedStats.avgReading}` : '—'}</strong>
+                </div>
+                <div style={{ width: 1, height: 16, backgroundColor: '#cbd5e1', alignSelf: 'center' }} aria-hidden="true" />
+                <div style={{ fontSize: '0.82rem', color: '#334155' }}>
+                  ✍️ Writing <strong>{completedStats.avgWriting ? `Band ${completedStats.avgWriting}` : '—'}</strong>
+                </div>
+                <div style={{ width: 1, height: 16, backgroundColor: '#cbd5e1', alignSelf: 'center' }} aria-hidden="true" />
+                <div style={{ fontSize: '0.82rem', color: '#334155' }}>
+                  🗣️ Speaking <strong>{completedStats.avgSpeaking ? `Band ${completedStats.avgSpeaking}` : '—'}</strong>
+                </div>
+              </div>
+            </div>
+          </section>
+        )}
+
+        {/* Section: Simple & Intuitive Test Launcher */}
         <section
           aria-labelledby="start-test-heading"
           style={{
             background: '#ffffff',
             border: '1px solid #e2e8f0',
             borderRadius: 16,
-            padding: 28,
-            marginBottom: 36,
-            boxShadow: '0 1px 3px rgba(0,0,0,0.05)',
+            padding: '24px 28px',
+            boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
           }}
         >
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', marginBottom: 20 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'flex-start', flexWrap: 'wrap', gap: 12, marginBottom: 20 }}>
             <div>
-              <h2 id="start-test-heading" style={{ margin: 0, fontSize: '1.35rem', fontWeight: 800, color: '#0f172a' }}>
-                Create New Practice Test
+              <h2 id="start-test-heading" style={{ margin: 0, fontSize: '1.25rem', fontWeight: 800, color: '#0f172a' }}>
+                Start Practice Session
               </h2>
               <p style={{ margin: '4px 0 0 0', fontSize: '0.88rem', color: '#64748b' }}>
-                Select test timing model and module scope.
+                Select your focus module and preferred exam timing condition.
               </p>
             </div>
-          </div>
 
-          {/* Test Timing Selector: 2 distinct types */}
-          <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: 16, marginBottom: 24 }}>
-            {/* Unlimited Mode */}
+            {/* Test Timing Segmented Control */}
             <div
-              onClick={() => setSelectedMode('untimed')}
+              role="radiogroup"
+              aria-label="Test timing mode"
               style={{
-                border: '2px solid',
-                borderColor: selectedMode === 'untimed' ? '#0f172a' : '#e2e8f0',
-                background: selectedMode === 'untimed' ? '#f8fafc' : '#ffffff',
-                borderRadius: 12,
-                padding: 20,
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
+                display: 'inline-flex',
+                background: '#f1f5f9',
+                padding: '3px',
+                borderRadius: '8px',
+                border: '1px solid #e2e8f0',
               }}
-              role="radio"
-              aria-checked={selectedMode === 'untimed'}
-              tabIndex={0}
-              onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && setSelectedMode('untimed')}
             >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <strong style={{ fontSize: '1.1rem', color: '#0f172a' }}>∞ Unlimited (Untimed)</strong>
-                {selectedMode === 'untimed' && (
-                  <span style={{ background: '#0f172a', color: '#fff', fontSize: '0.72rem', padding: '3px 8px', borderRadius: 9999, fontWeight: 700 }}>
-                    Selected
-                  </span>
-                )}
-              </div>
-              <p style={{ margin: 0, fontSize: '0.88rem', color: '#64748b', lineHeight: 1.5 }}>
-                Practice freely at your own speed with no timer pressure. Great for in-depth analysis, drafting essays, and studying explanations.
-              </p>
-            </div>
-
-            {/* Time-gated Mode */}
-            <div
-              onClick={() => setSelectedMode('timed')}
-              style={{
-                border: '2px solid',
-                borderColor: selectedMode === 'timed' ? '#0f172a' : '#e2e8f0',
-                background: selectedMode === 'timed' ? '#f8fafc' : '#ffffff',
-                borderRadius: 12,
-                padding: 20,
-                cursor: 'pointer',
-                transition: 'all 0.15s ease',
-              }}
-              role="radio"
-              aria-checked={selectedMode === 'timed'}
-              tabIndex={0}
-              onKeyDown={(e) => (e.key === ' ' || e.key === 'Enter') && setSelectedMode('timed')}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
-                <strong style={{ fontSize: '1.1rem', color: '#0f172a' }}>⏱ Time-Gated Exam Simulation</strong>
-                {selectedMode === 'timed' && (
-                  <span style={{ background: '#0f172a', color: '#fff', fontSize: '0.72rem', padding: '3px 8px', borderRadius: 9999, fontWeight: 700 }}>
-                    Selected
-                  </span>
-                )}
-              </div>
-              <p style={{ margin: 0, fontSize: '0.88rem', color: '#64748b', lineHeight: 1.5 }}>
-                Official IELTS test conditions with live countdown timers. Strict section time limits with monotonic time tracking.
-              </p>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selectedMode === 'untimed'}
+                onClick={() => setSelectedMode('untimed')}
+                style={{
+                  border: 'none',
+                  background: selectedMode === 'untimed' ? '#ffffff' : 'transparent',
+                  color: selectedMode === 'untimed' ? '#1d4ed8' : '#64748b',
+                  fontWeight: selectedMode === 'untimed' ? 700 : 500,
+                  fontSize: '0.82rem',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  boxShadow: selectedMode === 'untimed' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                  transition: 'all 0.15s ease',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span>∞</span>
+                <span>Self-Paced (Untimed)</span>
+              </button>
+              <button
+                type="button"
+                role="radio"
+                aria-checked={selectedMode === 'timed'}
+                onClick={() => setSelectedMode('timed')}
+                style={{
+                  border: 'none',
+                  background: selectedMode === 'timed' ? '#ffffff' : 'transparent',
+                  color: selectedMode === 'timed' ? '#1d4ed8' : '#64748b',
+                  fontWeight: selectedMode === 'timed' ? 700 : 500,
+                  fontSize: '0.82rem',
+                  padding: '6px 14px',
+                  borderRadius: '6px',
+                  cursor: 'pointer',
+                  boxShadow: selectedMode === 'timed' ? '0 1px 2px rgba(0,0,0,0.06)' : 'none',
+                  transition: 'all 0.15s ease',
+                  display: 'flex',
+                  alignItems: 'center',
+                  gap: 6,
+                }}
+              >
+                <span>⏱</span>
+                <span>Exam Timed</span>
+              </button>
             </div>
           </div>
 
-          {/* Scope Selector */}
-          <div style={{ marginBottom: 28 }}>
-            <label style={{ display: 'block', fontSize: '0.88rem', fontWeight: 700, color: '#334155', marginBottom: 10 }}>
-              Select Test Modules:
-            </label>
-            <div style={{ display: 'flex', gap: 8, flexWrap: 'wrap' }}>
-              {[
-                { scope: 'full' as Scope, label: 'Full Mock Test (All 4 Modules)', icon: '📚', count: 0 },
-                { scope: 'listening' as Scope, label: 'Listening Only', icon: '🎧', count: 4 },
-                { scope: 'reading' as Scope, label: 'Reading Only', icon: '📖', count: 3 },
-                { scope: 'writing' as Scope, label: 'Writing Only', icon: '✍️', count: 2 },
-                { scope: 'speaking' as Scope, label: 'Speaking Only', icon: '🗣️', count: 3 },
-              ].map((s) => {
-                const isSelected = selectedScope === s.scope;
-                return (
-                  <Button
-                    key={s.scope}
-                    variant={isSelected ? 'primary' : 'outline'}
-                    size="md"
-                    icon={s.icon}
-                    onClick={() => {
-                      setSelectedScope(s.scope);
-                      setSelectedPart(s.count > 0 ? 1 : 0);
-                    }}
-                  >
-                    {s.label}
-                  </Button>
-                );
-              })}
-            </div>
+          {/* Module Selector: 5 intuitive cards */}
+          <div
+            style={{
+              display: 'grid',
+              gridTemplateColumns: 'repeat(auto-fit, minmax(180px, 1fr))',
+              gap: 12,
+              marginBottom: 24,
+            }}
+          >
+            {MODULE_OPTIONS.map((m) => {
+              const isSelected = selectedScope === m.scope;
+              return (
+                <div
+                  key={m.scope}
+                  role="button"
+                  tabIndex={0}
+                  onClick={() => {
+                    setSelectedScope(m.scope);
+                    setSelectedPart(m.scope === 'full' ? 0 : 1);
+                  }}
+                  onKeyDown={(e) => {
+                    if (e.key === 'Enter' || e.key === ' ') {
+                      setSelectedScope(m.scope);
+                      setSelectedPart(m.scope === 'full' ? 0 : 1);
+                    }
+                  }}
+                  style={{
+                    border: '1.5px solid',
+                    borderColor: isSelected ? '#2563eb' : '#e2e8f0',
+                    background: isSelected ? '#eff6ff' : '#ffffff',
+                    borderRadius: 12,
+                    padding: '14px 16px',
+                    cursor: 'pointer',
+                    transition: 'all 0.15s ease',
+                    boxShadow: isSelected ? '0 2px 8px rgba(37, 99, 235, 0.12)' : '0 1px 2px rgba(0,0,0,0.02)',
+                    display: 'flex',
+                    flexDirection: 'column',
+                    justifyContent: 'space-between',
+                    minHeight: 90,
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                      <span style={{ fontSize: '1.25rem' }}>{m.icon}</span>
+                      <strong style={{ fontSize: '0.95rem', color: isSelected ? '#1d4ed8' : '#0f172a' }}>
+                        {m.title}
+                      </strong>
+                    </div>
+                    {isSelected && (
+                      <span
+                        style={{
+                          width: 8,
+                          height: 8,
+                          borderRadius: '50%',
+                          background: '#2563eb',
+                        }}
+                        aria-hidden="true"
+                      />
+                    )}
+                  </div>
+                  <div style={{ marginTop: 8 }}>
+                    <p style={{ margin: 0, fontSize: '0.78rem', color: '#64748b', lineHeight: 1.35 }}>
+                      {m.desc}
+                    </p>
+                    <span style={{ display: 'inline-block', marginTop: 6, fontSize: '0.72rem', color: '#94a3b8', fontWeight: 600 }}>
+                      {m.time}
+                    </span>
+                  </div>
+                </div>
+              );
+            })}
           </div>
 
-          {/* Action Buttons */}
-          <div style={{ display: 'flex', justifyContent: 'flex-end', gap: 12, flexWrap: 'wrap' }}>
-            <Button
-              variant="secondary"
-              size="lg"
-              loading={busy}
-              icon="🎧"
-              onClick={handleLaunchConversationalListening}
-              title="Practice official 2-way dialogue with Kokoro FP32 neural speech synthesis"
-            >
-              Practice 2-Way Conversational Listening →
-            </Button>
-            <Button
-              variant="primary"
-              size="lg"
-              loading={busy}
-              icon="🚀"
-              onClick={handleCreateTest}
-            >
-              Configure &amp; Generate Test →
-            </Button>
+          {/* Action Footer */}
+          <div
+            style={{
+              display: 'flex',
+              justifyContent: 'space-between',
+              alignItems: 'center',
+              flexWrap: 'wrap',
+              gap: 12,
+              paddingTop: 16,
+              borderTop: '1px solid #f1f5f9',
+            }}
+          >
+            <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+              {/* Contextual conversational listening shortcut */}
+              {(selectedScope === 'full' || selectedScope === 'listening') && (
+                <Button
+                  variant="secondary"
+                  size="md"
+                  loading={busy}
+                  icon="🎧"
+                  onClick={handleLaunchConversationalListening}
+                  title="Practice 2-way conversation dialogue with real-time Kokoro FP32 neural speech"
+                >
+                  2-Way Conversational Listening
+                </Button>
+              )}
+            </div>
+
+            <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+              <Button
+                variant="primary"
+                size="md"
+                loading={busy}
+                icon="🚀"
+                onClick={handleCreateTest}
+              >
+                {selectedScope === 'full' ? 'Create Full Mock Test →' : `Start ${MODULE_OPTIONS.find((m) => m.scope === selectedScope)?.title} Practice →`}
+              </Button>
+            </div>
           </div>
         </section>
 
-        {/* Section 2: Active Tests in Progress */}
-        <section aria-labelledby="in-progress-heading" style={{ marginBottom: 36 }}>
-          <h2 id="in-progress-heading" style={{ fontSize: '1.25rem', fontWeight: 800, marginBottom: 16 }}>
-            Tests in Progress ({inProgressTests.length})
-          </h2>
+        {/* Section: In-Progress Tests (Active Practice) */}
+        {inProgressTests.length > 0 && (
+          <section aria-labelledby="in-progress-heading">
+            <h2 id="in-progress-heading" style={{ fontSize: '1.15rem', fontWeight: 800, color: '#0f172a', marginBottom: 12 }}>
+              Tests in Progress ({inProgressTests.length})
+            </h2>
 
-          {inProgressTests.length === 0 ? (
-            <div style={{ background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 12, padding: 28, textAlign: 'center', color: '#64748b' }}>
-              No tests in progress. Create a new test above to practice.
-            </div>
-          ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 12 }}>
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {inProgressTests.map((t) => {
                 const isComplete = t.preparedCount === t.jobCount;
                 return (
@@ -389,39 +587,40 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                       background: '#ffffff',
                       border: '1px solid #e2e8f0',
                       borderRadius: 12,
-                      padding: '16px 20px',
+                      padding: '14px 18px',
                       display: 'flex',
                       alignItems: 'center',
                       justifyContent: 'space-between',
                       flexWrap: 'wrap',
                       gap: 12,
                       cursor: 'pointer',
-                      transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+                      transition: 'all 0.15s ease',
                       boxShadow: '0 1px 2px rgba(0,0,0,0.03)',
                     }}
-                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#94a3b8')}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#93c5fd')}
                     onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#e2e8f0')}
                   >
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 12 }}>
                       <span
                         style={{
-                          padding: '4px 10px',
+                          padding: '3px 8px',
                           borderRadius: 9999,
-                          fontSize: '0.75rem',
+                          fontSize: '0.72rem',
                           fontWeight: 700,
                           textTransform: 'uppercase',
-                          background: t.status === 'active' ? '#dcfce7' : isComplete ? '#dbeafe' : '#fef3c7',
-                          color: t.status === 'active' ? '#15803d' : isComplete ? '#1e40af' : '#b45309',
+                          background: t.status === 'active' ? '#ecfdf5' : isComplete ? '#eff6ff' : '#fffbeb',
+                          color: t.status === 'active' ? '#047857' : isComplete ? '#1d4ed8' : '#b45309',
+                          border: `1px solid ${t.status === 'active' ? '#a7f3d0' : isComplete ? '#bfdbfe' : '#fde68a'}`,
                         }}
                       >
                         {t.status === 'active' ? 'Testing' : isComplete ? 'Ready' : 'Draft'}
                       </span>
                       <div>
-                        <strong style={{ fontSize: '1.02rem', color: '#0f172a', textTransform: 'capitalize' }}>
-                          {t.scope === 'full' ? 'Full Mock Test' : `${t.scope || 'Practice'} Section`} · {t.mode === 'timed' ? '⏱ Timed' : '∞ Untimed'}
+                        <strong style={{ fontSize: '0.98rem', color: '#0f172a', textTransform: 'capitalize' }}>
+                          {t.scope === 'full' ? 'Full Mock Test' : `${t.scope || 'Practice'} Section`} · {t.mode === 'timed' ? '⏱ Timed' : '∞ Self-Paced'}
                         </strong>
-                        <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 2 }}>
-                          Progress: {t.preparedCount ?? 0} of {t.jobCount ?? 0} sections saved · Last updated {formatLastUpdated(t.updatedAt)}
+                        <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 2 }}>
+                          {t.preparedCount ?? 0} of {t.jobCount ?? 0} sections ready · Last updated {formatLastUpdated(t.updatedAt)}
                         </div>
                       </div>
                     </div>
@@ -452,117 +651,43 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                 );
               })}
             </div>
-          )}
-        </section>
+          </section>
+        )}
 
-        {/* Section 3: Completed History */}
+        {/* Section: Completed Test History */}
         <section aria-labelledby="history-heading">
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 16 }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'baseline', flexWrap: 'wrap', gap: 8, marginBottom: 14 }}>
             <div>
-              <h2 id="history-heading" style={{ fontSize: '1.25rem', fontWeight: 800, margin: 0, color: '#0f172a' }}>
+              <h2 id="history-heading" style={{ fontSize: '1.15rem', fontWeight: 800, margin: 0, color: '#0f172a' }}>
                 Completed Test History ({completedTests.length})
               </h2>
-              <div style={{ fontSize: '0.85rem', color: '#64748b', marginTop: 4 }}>
-                Review past estimated band scores, CEFR levels, and category performance breakdown.
+              <div style={{ fontSize: '0.82rem', color: '#64748b', marginTop: 3 }}>
+                Past test performances, category band scores, and CEFR estimates.
               </div>
             </div>
           </div>
 
           {completedTests.length === 0 ? (
-            <div style={{ background: '#f8fafc', border: '1px dashed #cbd5e1', borderRadius: 12, padding: 32, textAlign: 'center', color: '#64748b' }}>
-              <div style={{ fontSize: '1.8rem', marginBottom: 8 }}>📊</div>
-              <strong style={{ fontSize: '1rem', color: '#334155', display: 'block', marginBottom: 4 }}>No completed tests yet</strong>
-              <span>Your finished tests, full IELTS category bands, and CEFR level estimates will be tracked here.</span>
+            <div
+              style={{
+                background: '#ffffff',
+                border: '1px dashed #cbd5e1',
+                borderRadius: 14,
+                padding: '36px 20px',
+                textAlign: 'center',
+                color: '#64748b',
+              }}
+            >
+              <div style={{ fontSize: '2rem', marginBottom: 8 }}>📊</div>
+              <strong style={{ fontSize: '0.95rem', color: '#334155', display: 'block', marginBottom: 4 }}>
+                No completed tests yet
+              </strong>
+              <p style={{ margin: 0, fontSize: '0.85rem' }}>
+                Start a practice test above. Once completed, your scores, detailed answers, and CEFR ratings will be preserved here.
+              </p>
             </div>
           ) : (
-            <div style={{ display: 'flex', flexDirection: 'column', gap: 16 }}>
-              {/* Executive Proficiency Summary Card */}
-              {completedStats && (
-                <div
-                  style={{
-                    backgroundColor: '#ffffff',
-                    border: '1px solid #cbd5e1',
-                    borderRadius: 14,
-                    padding: '20px 24px',
-                    display: 'grid',
-                    gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))',
-                    gap: 20,
-                    boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
-                  }}
-                >
-                  <div>
-                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                      Best Estimated Band
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 4 }}>
-                      <span style={{ fontSize: '2rem', fontWeight: 900, color: '#0f172a', lineHeight: 1 }}>
-                        {completedStats.bestBand ? completedStats.bestBand.toFixed(1) : '—'}
-                      </span>
-                      {completedStats.bestCefr && (
-                        <span
-                          style={{
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            fontSize: '0.75rem',
-                            fontWeight: 800,
-                            backgroundColor: completedStats.bestCefr.badgeStyle.bg,
-                            color: completedStats.bestCefr.badgeStyle.text,
-                            border: `1px solid ${completedStats.bestCefr.badgeStyle.border}`,
-                          }}
-                        >
-                          CEFR {completedStats.bestCefr.level}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 4 }}>
-                      {completedStats.bestCefr?.name || 'Proficiency level'}
-                    </div>
-                  </div>
-
-                  <div>
-                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em' }}>
-                      Latest Test Band
-                    </div>
-                    <div style={{ display: 'flex', alignItems: 'baseline', gap: 10, marginTop: 4 }}>
-                      <span style={{ fontSize: '2rem', fontWeight: 900, color: '#2563eb', lineHeight: 1 }}>
-                        {completedStats.latestBand ? completedStats.latestBand.toFixed(1) : '—'}
-                      </span>
-                      {completedStats.latestCefr && (
-                        <span
-                          style={{
-                            padding: '3px 8px',
-                            borderRadius: 6,
-                            fontSize: '0.75rem',
-                            fontWeight: 800,
-                            backgroundColor: completedStats.latestCefr.badgeStyle.bg,
-                            color: completedStats.latestCefr.badgeStyle.text,
-                            border: `1px solid ${completedStats.latestCefr.badgeStyle.border}`,
-                          }}
-                        >
-                          CEFR {completedStats.latestCefr.level}
-                        </span>
-                      )}
-                    </div>
-                    <div style={{ fontSize: '0.75rem', color: '#64748b', marginTop: 4 }}>
-                      {completedStats.count} test{completedStats.count > 1 ? 's' : ''} completed
-                    </div>
-                  </div>
-
-                  <div style={{ borderLeft: '1px solid #e2e8f0', paddingLeft: 18 }}>
-                    <div style={{ fontSize: '0.72rem', fontWeight: 700, color: '#64748b', textTransform: 'uppercase', letterSpacing: '0.04em', marginBottom: 8 }}>
-                      Category Averages
-                    </div>
-                    <div style={{ display: 'grid', gridTemplateColumns: '1fr 1fr', gap: '6px 14px', fontSize: '0.82rem' }}>
-                      <div style={{ color: '#334155' }}>🎧 Listening: <strong>{completedStats.avgListening ? `Band ${completedStats.avgListening}` : '—'}</strong></div>
-                      <div style={{ color: '#334155' }}>📖 Reading: <strong>{completedStats.avgReading ? `Band ${completedStats.avgReading}` : '—'}</strong></div>
-                      <div style={{ color: '#334155' }}>✍️ Writing: <strong>{completedStats.avgWriting ? `Band ${completedStats.avgWriting}` : '—'}</strong></div>
-                      <div style={{ color: '#334155' }}>🗣️ Speaking: <strong>{completedStats.avgSpeaking ? `Band ${completedStats.avgSpeaking}` : '—'}</strong></div>
-                    </div>
-                  </div>
-                </div>
-              )}
-
-              {/* Completed Tests List */}
+            <div style={{ display: 'flex', flexDirection: 'column', gap: 10 }}>
               {completedTests.map((t) => {
                 const cefrInfo = ieltsBandToCefr(t.overallBand);
                 const hasOverall = typeof t.overallBand === 'number' && t.overallBand > 0;
@@ -574,43 +699,141 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                     style={{
                       background: '#ffffff',
                       border: '1px solid #e2e8f0',
-                      borderRadius: 14,
-                      padding: '20px 22px',
+                      borderRadius: 12,
+                      padding: '16px 20px',
                       display: 'flex',
-                      flexDirection: 'column',
+                      alignItems: 'center',
+                      justifyContent: 'space-between',
+                      flexWrap: 'wrap',
                       gap: 16,
                       cursor: 'pointer',
-                      boxShadow: '0 1px 3px rgba(0,0,0,0.03)',
-                      transition: 'border-color 0.15s ease, box-shadow 0.15s ease',
+                      boxShadow: '0 1px 2px rgba(15, 23, 42, 0.03)',
+                      transition: 'all 0.15s ease',
                     }}
+                    onMouseEnter={(e) => (e.currentTarget.style.borderColor = '#93c5fd')}
+                    onMouseLeave={(e) => (e.currentTarget.style.borderColor = '#e2e8f0')}
                   >
-                    {/* Top Row: Title, Date, Actions */}
-                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', flexWrap: 'wrap', gap: 12 }}>
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 10, flexWrap: 'wrap' }}>
+                    {/* Left: Title, Mode, Date */}
+                    <div style={{ minWidth: 220 }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                        <strong style={{ fontSize: '0.98rem', color: '#0f172a', textTransform: 'capitalize' }}>
+                          {t.scope === 'full' ? 'Full Academic Mock' : `${t.scope || 'Practice'} Section`}
+                        </strong>
                         <span
                           style={{
-                            padding: '3px 8px',
-                            borderRadius: 9999,
                             fontSize: '0.72rem',
-                            fontWeight: 700,
-                            textTransform: 'uppercase',
-                            letterSpacing: '0.04em',
-                            background: '#ecfdf5',
-                            color: '#065f46',
-                            border: '1px solid #a7f3d0',
+                            padding: '2px 6px',
+                            borderRadius: 4,
+                            background: '#f1f5f9',
+                            color: '#475569',
+                            fontWeight: 600,
                           }}
                         >
-                          ✓ Completed
-                        </span>
-                        <strong style={{ fontSize: '1.05rem', color: '#0f172a', textTransform: 'capitalize' }}>
-                          {t.scope === 'full' ? 'Full Academic Mock Test' : `${t.scope || 'Practice'} Section`} · {t.mode === 'timed' ? '⏱ Timed' : '∞ Untimed'}
-                        </strong>
-                        <span style={{ fontSize: '0.82rem', color: '#64748b' }}>
-                          · {formatCompletedDate(t.updatedAt)}
+                          {t.mode === 'timed' ? '⏱ Timed' : '∞ Self-Paced'}
                         </span>
                       </div>
+                      <div style={{ fontSize: '0.78rem', color: '#64748b', marginTop: 4 }}>
+                        {formatCompletedDate(t.updatedAt)}
+                      </div>
+                    </div>
 
-                      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+                    {/* Middle: Clean Category Band Chips */}
+                    <div
+                      style={{
+                        display: 'flex',
+                        alignItems: 'center',
+                        gap: 8,
+                        flexWrap: 'wrap',
+                      }}
+                    >
+                      <span
+                        style={{
+                          fontSize: '0.78rem',
+                          padding: '4px 8px',
+                          borderRadius: 6,
+                          background: typeof t.bands?.listening === 'number' ? '#eff6ff' : '#f8fafc',
+                          color: typeof t.bands?.listening === 'number' ? '#1d4ed8' : '#94a3b8',
+                          border: '1px solid',
+                          borderColor: typeof t.bands?.listening === 'number' ? '#bfdbfe' : '#e2e8f0',
+                          fontWeight: 600,
+                        }}
+                      >
+                        🎧 {typeof t.bands?.listening === 'number' ? t.bands.listening.toFixed(1) : '—'}
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: '0.78rem',
+                          padding: '4px 8px',
+                          borderRadius: 6,
+                          background: typeof t.bands?.reading === 'number' ? '#ecfdf5' : '#f8fafc',
+                          color: typeof t.bands?.reading === 'number' ? '#047857' : '#94a3b8',
+                          border: '1px solid',
+                          borderColor: typeof t.bands?.reading === 'number' ? '#a7f3d0' : '#e2e8f0',
+                          fontWeight: 600,
+                        }}
+                      >
+                        📖 {typeof t.bands?.reading === 'number' ? t.bands.reading.toFixed(1) : '—'}
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: '0.78rem',
+                          padding: '4px 8px',
+                          borderRadius: 6,
+                          background: typeof t.bands?.writing === 'number' ? '#f5f3ff' : '#f8fafc',
+                          color: typeof t.bands?.writing === 'number' ? '#6d28d9' : '#94a3b8',
+                          border: '1px solid',
+                          borderColor: typeof t.bands?.writing === 'number' ? '#ddd6fe' : '#e2e8f0',
+                          fontWeight: 600,
+                        }}
+                      >
+                        ✍️ {typeof t.bands?.writing === 'number' ? t.bands.writing.toFixed(1) : '—'}
+                      </span>
+
+                      <span
+                        style={{
+                          fontSize: '0.78rem',
+                          padding: '4px 8px',
+                          borderRadius: 6,
+                          background: typeof t.bands?.speaking === 'number' ? '#fffbeb' : '#f8fafc',
+                          color: typeof t.bands?.speaking === 'number' ? '#b45309' : '#94a3b8',
+                          border: '1px solid',
+                          borderColor: typeof t.bands?.speaking === 'number' ? '#fde68a' : '#e2e8f0',
+                          fontWeight: 600,
+                        }}
+                      >
+                        🗣️ {typeof t.bands?.speaking === 'number' ? t.bands.speaking.toFixed(1) : '—'}
+                      </span>
+                    </div>
+
+                    {/* Right: Overall Band & Action Buttons */}
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 14 }}>
+                      <div style={{ textAlign: 'right' }}>
+                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 6 }}>
+                          <span style={{ fontSize: '1.25rem', fontWeight: 900, color: '#0f172a' }}>
+                            {hasOverall ? `Band ${t.overallBand!.toFixed(1)}` : '—'}
+                          </span>
+                          {cefrInfo && (
+                            <span
+                              style={{
+                                padding: '2px 6px',
+                                borderRadius: 4,
+                                fontSize: '0.7rem',
+                                fontWeight: 800,
+                                backgroundColor: cefrInfo.badgeStyle.bg,
+                                color: cefrInfo.badgeStyle.text,
+                                border: `1px solid ${cefrInfo.badgeStyle.border}`,
+                              }}
+                              title={cefrInfo.summary}
+                            >
+                              {cefrInfo.level}
+                            </span>
+                          )}
+                        </div>
+                      </div>
+
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6 }}>
                         <Button
                           variant="secondary"
                           size="sm"
@@ -620,175 +843,17 @@ export function Dashboard({ onOpenAttempt, onStartPreparation }: DashboardProps)
                             onOpenAttempt(t.id);
                           }}
                         >
-                          Review Score & Analysis →
+                          Review →
                         </Button>
                         <Button
                           variant="ghost"
                           size="sm"
                           icon="🗑️"
                           onClick={(e) => handleDelete(t.id, e)}
-                          title="Delete test"
+                          title="Delete test permanently"
                         >
                           Delete
                         </Button>
-                      </div>
-                    </div>
-
-                    {/* Band Scores Strip: All IELTS Categories + Overall & CEFR */}
-                    <div
-                      style={{
-                        display: 'grid',
-                        gridTemplateColumns: 'repeat(auto-fit, minmax(140px, 1fr))',
-                        gap: 12,
-                        background: '#f8fafc',
-                        padding: '14px 16px',
-                        borderRadius: 10,
-                        border: '1px solid #edf2f7',
-                      }}
-                    >
-                      {/* Overall Band + CEFR Badge */}
-                      <div
-                        style={{
-                          background: '#ffffff',
-                          border: '1px solid #cbd5e1',
-                          borderRadius: 8,
-                          padding: '10px 14px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <div style={{ fontSize: '0.72rem', fontWeight: 700, textTransform: 'uppercase', color: '#64748b', letterSpacing: '0.04em' }}>
-                          Overall Band
-                        </div>
-                        <div style={{ display: 'flex', alignItems: 'baseline', gap: 8, marginTop: 3 }}>
-                          <span style={{ fontSize: '1.75rem', fontWeight: 900, color: '#0f172a', lineHeight: 1 }}>
-                            {hasOverall ? t.overallBand!.toFixed(1) : '—'}
-                          </span>
-                          {cefrInfo && (
-                            <span
-                              style={{
-                                padding: '2px 8px',
-                                borderRadius: 6,
-                                fontSize: '0.72rem',
-                                fontWeight: 800,
-                                backgroundColor: cefrInfo.badgeStyle.bg,
-                                color: cefrInfo.badgeStyle.text,
-                                border: `1px solid ${cefrInfo.badgeStyle.border}`,
-                              }}
-                              title={cefrInfo.summary}
-                            >
-                              CEFR {cefrInfo.level}
-                            </span>
-                          )}
-                        </div>
-                        <div style={{ fontSize: '0.72rem', color: '#64748b', marginTop: 4 }}>
-                          {cefrInfo ? cefrInfo.name : 'Estimated band'}
-                        </div>
-                      </div>
-
-                      {/* 🎧 Listening Category Band */}
-                      <div
-                        style={{
-                          background: '#ffffff',
-                          border: t.scope === 'listening' ? '2px solid #3b82f6' : '1px solid #e2e8f0',
-                          borderRadius: 8,
-                          padding: '10px 12px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.75rem', fontWeight: 600, color: '#475569' }}>
-                          <span>🎧</span>
-                          <span>Listening</span>
-                        </div>
-                        <div style={{ fontSize: '1.35rem', fontWeight: 800, color: typeof t.bands?.listening === 'number' ? '#1d4ed8' : '#94a3b8', marginTop: 3 }}>
-                          {typeof t.bands?.listening === 'number' ? `Band ${t.bands.listening.toFixed(1)}` : '—'}
-                        </div>
-                        <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                          {typeof t.bands?.listening === 'number' && ieltsBandToCefr(t.bands.listening)
-                            ? `CEFR ${ieltsBandToCefr(t.bands.listening)?.level}`
-                            : t.scope === 'full' ? 'Not recorded' : 'Optional'}
-                        </div>
-                      </div>
-
-                      {/* 📖 Reading Category Band */}
-                      <div
-                        style={{
-                          background: '#ffffff',
-                          border: t.scope === 'reading' ? '2px solid #10b981' : '1px solid #e2e8f0',
-                          borderRadius: 8,
-                          padding: '10px 12px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.75rem', fontWeight: 600, color: '#475569' }}>
-                          <span>📖</span>
-                          <span>Reading</span>
-                        </div>
-                        <div style={{ fontSize: '1.35rem', fontWeight: 800, color: typeof t.bands?.reading === 'number' ? '#047857' : '#94a3b8', marginTop: 3 }}>
-                          {typeof t.bands?.reading === 'number' ? `Band ${t.bands.reading.toFixed(1)}` : '—'}
-                        </div>
-                        <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                          {typeof t.bands?.reading === 'number' && ieltsBandToCefr(t.bands.reading)
-                            ? `CEFR ${ieltsBandToCefr(t.bands.reading)?.level}`
-                            : t.scope === 'full' ? 'Not recorded' : 'Optional'}
-                        </div>
-                      </div>
-
-                      {/* ✍️ Writing Category Band */}
-                      <div
-                        style={{
-                          background: '#ffffff',
-                          border: t.scope === 'writing' ? '2px solid #8b5cf6' : '1px solid #e2e8f0',
-                          borderRadius: 8,
-                          padding: '10px 12px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.75rem', fontWeight: 600, color: '#475569' }}>
-                          <span>✍️</span>
-                          <span>Writing</span>
-                        </div>
-                        <div style={{ fontSize: '1.35rem', fontWeight: 800, color: typeof t.bands?.writing === 'number' ? '#6d28d9' : '#94a3b8', marginTop: 3 }}>
-                          {typeof t.bands?.writing === 'number' ? `Band ${t.bands.writing.toFixed(1)}` : '—'}
-                        </div>
-                        <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                          {typeof t.bands?.writing === 'number' && ieltsBandToCefr(t.bands.writing)
-                            ? `CEFR ${ieltsBandToCefr(t.bands.writing)?.level}`
-                            : t.scope === 'full' ? 'Not recorded' : 'Optional'}
-                        </div>
-                      </div>
-
-                      {/* 🗣️ Speaking Category Band */}
-                      <div
-                        style={{
-                          background: '#ffffff',
-                          border: t.scope === 'speaking' ? '2px solid #f59e0b' : '1px solid #e2e8f0',
-                          borderRadius: 8,
-                          padding: '10px 12px',
-                          display: 'flex',
-                          flexDirection: 'column',
-                          justifyContent: 'center',
-                        }}
-                      >
-                        <div style={{ display: 'flex', alignItems: 'center', gap: 5, fontSize: '0.75rem', fontWeight: 600, color: '#475569' }}>
-                          <span>🗣️</span>
-                          <span>Speaking</span>
-                        </div>
-                        <div style={{ fontSize: '1.35rem', fontWeight: 800, color: typeof t.bands?.speaking === 'number' ? '#b45309' : '#94a3b8', marginTop: 3 }}>
-                          {typeof t.bands?.speaking === 'number' ? `Band ${t.bands.speaking.toFixed(1)}` : '—'}
-                        </div>
-                        <div style={{ fontSize: '0.7rem', color: '#64748b' }}>
-                          {typeof t.bands?.speaking === 'number' && ieltsBandToCefr(t.bands.speaking)
-                            ? `CEFR ${ieltsBandToCefr(t.bands.speaking)?.level}`
-                            : t.scope === 'full' ? 'Not recorded' : 'Optional'}
-                        </div>
                       </div>
                     </div>
                   </article>
