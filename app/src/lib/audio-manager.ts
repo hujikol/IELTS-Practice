@@ -9,14 +9,20 @@ const DB_NAME = 'ielts_studio_audio_db';
 const DB_VERSION = 1;
 const STORE_NAME = 'audio_clips';
 
-export type TtsModelType = 'kokoro-fp32' | 'kokoro-q8' | 'kokoro-q4' | 'webspeech';
+export type TtsModelType =
+  | 'kokoro-fp32'
+  | 'kokoro-fp16'
+  | 'kokoro-q4f16'
+  | 'kokoro-q8'
+  | 'kokoro-q4'
+  | 'webspeech';
 
 export type TtsModelInfo = {
   id: TtsModelType;
   name: string;
   badge: string;
   badgeColor: string;
-  dtype?: 'fp32' | 'q8' | 'q4';
+  dtype?: 'fp32' | 'fp16' | 'q8' | 'q4' | 'q4f16';
   downloadSize: string;
   storageEstimate: string;
   minRam: string;
@@ -31,47 +37,77 @@ export const TTS_MODELS: Record<TtsModelType, TtsModelInfo> = {
   'kokoro-fp32': {
     id: 'kokoro-fp32',
     name: 'Kokoro-82M (FP32 Full Precision)',
-    badge: 'Studio Fidelity',
+    badge: '32-Bit Studio Master',
     badgeColor: '#1d4ed8',
     dtype: 'fp32',
-    downloadSize: '~320 MB',
+    downloadSize: '326 MB',
     storageEstimate: '~350 MB',
     minRam: '4 GB (~1.5 GB free heap)',
     recRam: '8 GB+ RAM',
     minCpu: '64-bit multi-core (x86-64 / ARM64)',
     recCpu: 'Apple Silicon (M-series) or 4+ cores 2.0GHz+',
-    description: 'Highest neural voice fidelity with zero quantization artifacts. Flawless Cambridge/US cadence and subtle phonetic nuances.',
-    bestFor: 'Modern laptops and desktops with multi-core processors.',
+    description: 'Full 32-bit floating point weights with zero quantization. Highest vocal fidelity, Cambridge nuances, and flawless prosody.',
+    bestFor: 'Modern desktops and high-performance laptops with fast internet.',
+  },
+  'kokoro-fp16': {
+    id: 'kokoro-fp16',
+    name: 'Kokoro-82M (FP16 16-Bit Half Precision)',
+    badge: '16-Bit High Fidelity',
+    badgeColor: '#0284c7',
+    dtype: 'fp16',
+    downloadSize: '163 MB',
+    storageEstimate: '~175 MB',
+    minRam: '3 GB (~800 MB free heap)',
+    recRam: '4 GB+ RAM',
+    minCpu: '64-bit multi-core (x86-64 / ARM64)',
+    recCpu: 'Apple Silicon or quad-core 2.0GHz+',
+    description: 'Exact 16-bit floating point precision. Cuts download in half (163 MB vs 326 MB) with virtually indistinguishable sound quality and no quantization noise.',
+    bestFor: 'Recommended sweet spot: Studio-grade audio with 50% lower download & memory.',
+  },
+  'kokoro-q4f16': {
+    id: 'kokoro-q4f16',
+    name: 'Kokoro-82M (Q4F16 Mixed Precision)',
+    badge: 'Fast Mixed Precision',
+    badgeColor: '#7c3aed',
+    dtype: 'q4f16',
+    downloadSize: '154 MB',
+    storageEstimate: '~165 MB',
+    minRam: '2 GB (~500 MB free heap)',
+    recRam: '4 GB+ RAM',
+    minCpu: 'Dual-core CPU 1.8GHz+',
+    recCpu: 'Quad-core CPU 2.0GHz+',
+    description: '4-bit matrix multiplication paired with 16-bit weight precision for accelerated inference and reduced memory pressure.',
+    bestFor: 'Laptops looking for fast generation with 16-bit vocal clarity.',
   },
   'kokoro-q8': {
     id: 'kokoro-q8',
     name: 'Kokoro-82M (Q8 8-Bit Quantized)',
-    badge: 'Balanced / Recommended',
+    badge: '8-Bit Balanced',
     badgeColor: '#059669',
     dtype: 'q8',
-    downloadSize: '~85 MB',
-    storageEstimate: '~95 MB',
-    minRam: '2 GB (~600 MB free heap)',
+    downloadSize: '92.4 MB',
+    storageEstimate: '~100 MB',
+    minRam: '2 GB (~400 MB free heap)',
     recRam: '4 GB+ RAM',
     minCpu: 'Dual-core CPU 1.8GHz+',
     recCpu: 'Quad-core CPU 2.0GHz+',
-    description: '75% smaller download than FP32 while preserving 95%+ of the acoustic quality. Fast on-device generation with light memory load.',
-    bestFor: 'Standard laptops, metered Wi-Fi, and quick downloads.',
+    description: '8-bit quantized weights offering small download and low RAM consumption while preserving strong neural intelligibility.',
+    bestFor: 'Everyday laptops, metered Wi-Fi, and quick downloads.',
   },
   'kokoro-q4': {
     id: 'kokoro-q4',
-    name: 'Kokoro-82M (Q4 4-Bit Compact)',
-    badge: 'Lightweight & Fast',
+    name: 'Kokoro-82M (Q4 4-Bit Matmul)',
+    badge: '4-Bit Compact',
     badgeColor: '#d97706',
     dtype: 'q4',
-    downloadSize: '~45 MB',
-    storageEstimate: '~50 MB',
-    minRam: '1.5 GB (~300 MB free heap)',
-    recRam: '2 GB+ RAM',
+    downloadSize: '305 MB',
+    storageEstimate: '~320 MB',
+    minRam: '2 GB (~500 MB free heap)',
+    recRam: '4 GB+ RAM',
     minCpu: 'Any 64-bit multi-core CPU',
-    recCpu: 'Dual-core 1.6GHz+',
-    description: 'Maximum compression for quick downloads and low memory consumption. Great speech intelligibility on budget devices.',
-    bestFor: 'Older machines, low-memory tabs, or battery saving.',
+    recCpu: 'Dual-core 1.8GHz+',
+    description: '4-bit integer weights designed for low CPU compute overhead.',
+    bestFor: 'Devices with limited CPU compute power.',
   },
   webspeech: {
     id: 'webspeech',
@@ -551,10 +587,16 @@ export async function clearAllAudioAndModelCaches(): Promise<{ clipsCleared: num
 
   // 3. Clear localStorage flags
   if (typeof localStorage !== 'undefined') {
-    localStorage.removeItem('ielts_audio_model_cached_fp32');
-    localStorage.removeItem('ielts_audio_model_cached_q8');
-    localStorage.removeItem('ielts_audio_model_cached_q4');
-    localStorage.removeItem('ielts_audio_model_cached');
+    try {
+      for (let i = localStorage.length - 1; i >= 0; i--) {
+        const key = localStorage.key(i);
+        if (key && key.startsWith('ielts_audio_model_cached')) {
+          localStorage.removeItem(key);
+        }
+      }
+    } catch {
+      // ignore
+    }
   }
 
   // 4. Invalidate memory instance

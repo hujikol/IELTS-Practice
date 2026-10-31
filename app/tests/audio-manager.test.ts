@@ -10,11 +10,18 @@ import {
   type TtsModelType,
 } from '../src/lib/audio-manager.ts';
 
-test('TTS_MODELS covers all 4 expected models with complete specification contracts', () => {
-  const expected: TtsModelType[] = ['kokoro-fp32', 'kokoro-q8', 'kokoro-q4', 'webspeech'];
+test('TTS_MODELS covers all expected models including 16-bit FP16 with complete specification contracts', () => {
+  const expected: TtsModelType[] = [
+    'kokoro-fp32',
+    'kokoro-fp16',
+    'kokoro-q4f16',
+    'kokoro-q8',
+    'kokoro-q4',
+    'webspeech',
+  ];
   const keys = Object.keys(TTS_MODELS) as TtsModelType[];
 
-  assert.equal(keys.length, 4, 'Expected exactly 4 TTS model configurations');
+  assert.equal(keys.length, 6, 'Expected exactly 6 TTS model configurations');
   for (const exp of expected) {
     assert.ok(exp in TTS_MODELS, `Missing TTS model definition: ${exp}`);
     const m = TTS_MODELS[exp];
@@ -30,9 +37,13 @@ test('TTS_MODELS covers all 4 expected models with complete specification contra
   }
 });
 
-test('getTtsModelPreference defaults to kokoro-fp32 and setTtsModelPreference persists changes', () => {
+test('getTtsModelPreference defaults to kokoro-fp32 and setTtsModelPreference persists changes including fp16', () => {
   // Ensure default
   assert.equal(getTtsModelPreference(), 'kokoro-fp32');
+
+  // Change to fp16
+  setTtsModelPreference('kokoro-fp16');
+  assert.equal(getTtsModelPreference(), 'kokoro-fp16');
 
   // Change to q8
   setTtsModelPreference('kokoro-q8');
@@ -69,3 +80,4 @@ test('synthesizeSpeechAudio returns an empty blob for empty text or webspeech', 
   const webSpeechRes = await synthesizeSpeechAudio('Hello candidate', 'af_heart', 1.0, 'webspeech');
   assert.equal(webSpeechRes.size, 0, 'webspeech returns empty blob for browser fallback');
 });
+

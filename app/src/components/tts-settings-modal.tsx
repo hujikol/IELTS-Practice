@@ -523,3 +523,4 @@ export function TtsSettingsModal({ isOpen, onClose, onModelChanged }: TtsSetting
     </div>
   );
 }
+
