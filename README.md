@@ -29,6 +29,8 @@ An offline-first, client-side web application for IELTS Academic preparation. Ge
   - `PART 3`: Abstract, society-level analytical discussion questions thematically linked to Part 2.
 - **Recording & Audio Engine**:
   - `MediaRecorder` capture with `audio/webm;codecs=opus` (with MP4 fallback) and chunked IndexedDB persistence (`ielts_studio_speaking_db`).
+  - **Incremental & Eager Persistence**: Voice clips and transcripts are saved to IndexedDB and synced to the session store immediately on every answer, auto-stop (VAD/hard-cap), manual stop, or early exit/finish, preventing lost audio.
+  - **Review Playback**: Review screen re-hydrates candidate recordings in natural sequence with dedicated audio players for candidate self-review and AI transcription.
   - Voice Activity Detection (VAD) via RMS thresholds for exam auto-advance (3s silence in Part 1, 4s in Part 3).
   - Dual-engine examiner TTS: Kokoro neural TTS + Web Speech API fallback.
   - Live verbatim candidate transcription via native Web Speech API.
@@ -53,6 +55,13 @@ An offline-first, client-side web application for IELTS Academic preparation. Ge
   - Center Canvas: Reading passage, Kokoro listening audio player, vector visuals, and question groups.
   - Right Drawer: Floating auto-saving scratchpad notes with live word counting.
 - **Interactive Drag & Drop Map / Plan Labelling**: Architectural SVG vector maps with Entrance marker, Compass Rose, drop pins (`A`–`H`), and clean place-name parsing.
+
+### 5. Seeded IELTS Variety Engine (Dynamic Multi-Skill Generation)
+- **High-Entropy Standardized Blueprints**: Guarantees authentic, non-repetitive generation across all 4 modules while remaining 100% compliant with Cambridge IELTS specifications:
+  - **Speaking**: Rotates 4 familiar openers (*work/study, hometown, accommodation, area*) with 80+ everyday topics in Part 1 across 8 question styles (*frequency, preference, past habits, change over time, future intention, etc.*), 64 distinct Cambridge Part 2 cue cards, and 6 in-depth abstract discussion questions in Part 3 covering 9 cognitive IELTS functions (*evaluating, predicting, weighing trade-offs, speculating*). Includes seeded authentic fallbacks for practice mode.
+  - **Listening**: 28 Part 1 transactional scenarios, 22 Part 2 social talks, 12 Part 3 academic dialogues, and 28 Part 4 academic lecture domains dynamically paired with official question formats (*form, note, table, sentence, and flow-chart completion, multiple choice, matching features and opinions*).
+  - **Reading**: Cycles and balances all 14 official Cambridge IELTS Academic question types (*TRUE/FALSE/NOT GIVEN, YES/NO/NOT GIVEN, matching headings i–viii, matching information to paragraphs A–G, matching features, matching sentence endings, summary completion with or without word banks, note/table/flow-chart completion, short answers, multiple choice*) across 31 academic subject domains and 9 structural narrative types, ensuring no duplicate formats across passages.
+  - **Writing**: Balanced rotation of Task 1 visuals (*tables, bar charts, line graphs, process diagrams*) and all 7 Task 2 essay types (*agree/disagree, both views & opinion, advantages/disadvantages, problem-solution, causes-solutions, positive/negative development, two-part questions*) across 27 authentic themes.
 
 ---
 
@@ -139,6 +148,7 @@ IELTS_practice/
 │   │       ├── score-cache.ts            # Deterministic scoring cache (prompt, text, rubric, model)
 │   │       ├── scoring.ts                # Diagnostic aggregation & weakness ranking
 │   │       ├── material.ts               # Schema validation & test data structures
+│   │       ├── variety.ts                # Seeded IELTS variety engine & diverse blueprints
 │   │       ├── providers.ts              # LLM integration (chat & dedicated scoring)
 │   │       └── types.ts                  # Domain models & utility functions
 │   ├── scripts/

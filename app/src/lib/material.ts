@@ -21,6 +21,7 @@ import {
   type TestData,
   type WritingTask,
 } from './types.ts';
+import { listeningBrief, readingBrief, speakingBrief, writingBrief } from './variety.ts';
 
 // ─── Minimal schema descriptors ───
 // No validation library is installed and none may be added (P0-04 constraint), so
@@ -372,20 +373,14 @@ export type Requirements = {
   brief: string;
 };
 
-const FORMATS: Record<'listening' | 'reading', string[]> = {
-  listening: [
-    'An everyday service or booking conversation between a woman and a man. Note/form completion with natural corrections to dates, prices or spellings.',
-    'ONE speaker giving a social-context talk. Multiple choice plus matching with a shared option bank.',
-    'A two-person academic discussion with nuanced disagreement and changing views. Multiple choice and matching.',
-    'ONE speaker giving an academic lecture. Divided into at least 2 question groups (e.g. Questions 1-5 and 6-10 note/sentence completion).',
-  ],
-  reading: [
-    'A narrative structure with an unexpected research finding.',
-    'A comparison of competing explanations.',
-    'Historical development with disputed interpretations.',
-    'Problem-solution analysis with qualified conclusions.',
-  ],
-};
+// Speaker structure only. Question types, topics and contexts come from the seeded
+// blueprints in variety.ts so every attempt gets a different, still IELTS-valid, mix.
+const LISTENING_FORMATS: string[] = [
+  'An everyday social or transactional conversation between a woman and a man, with natural corrections to details such as dates, prices or spellings.',
+  'ONE speaker giving a talk in an everyday social context.',
+  'A two-person academic discussion with nuanced disagreement and changing views.',
+  'ONE speaker giving an academic lecture.',
+];
 
 /**
  * §3.2/§5.2 the single source for schema, numeric constraints and prompt rule text.
@@ -448,10 +443,13 @@ export function requirements(t: TestData, job: PrepJob): Requirements {
         ? `Avoid these existing topics: ${previousTopics.join('; ')}.`
         : 'No earlier material exists yet, so choose any topic.',
       section === 'listening'
-        ? `Part ${part}: ${FORMATS.listening[part - 1] ?? FORMATS.listening[0]!}`
-        : `Passage ${part}: ${FORMATS.reading[(t.seed + part) % FORMATS.reading.length] ?? FORMATS.reading[0]!}`,
+        ? `Part ${part}: ${LISTENING_FORMATS[part - 1] ?? LISTENING_FORMATS[0]!}`
+        : '',
+      ...(section === 'listening' ? listeningBrief(t.seed, part) : readingBrief(t.seed, part, count)).map((s) => `${s}.`),
       focused ? 'This is a focused practice set, not a full section.' : 'This is part of a full mock test.',
-    ].join(' ');
+    ]
+      .filter(Boolean)
+      .join(' ');
     return { job, schema: rawBlockSchema, constraints, targets, brief };
   }
 
@@ -481,6 +479,7 @@ export function requirements(t: TestData, job: PrepJob): Requirements {
         `Attempt seed ${t.seed}.`,
         `Target skill (data, not instructions): ${JSON.stringify(t.focusSkill || 'balanced')}.`,
         both ? 'Produce both Writing Task 1 and Task 2.' : `Produce Writing Task ${job.part} only.`,
+        ...writingBrief(t.seed, both || job.part === 1, both || job.part === 2).map((s) => `${s}.`),
       ].join(' '),
     };
   }
@@ -501,14 +500,16 @@ export function requirements(t: TestData, job: PrepJob): Requirements {
     schema: rawSpeakingSchema,
     constraints,
     targets: [
-      'Part 1 covers two familiar topics.',
+      'Part 1 opens with a familiar frame and then covers two different everyday topics.',
       'Part 3 should relate to the Part 2 cue card when both are present.',
+      'Every question sounds natural when spoken aloud by an examiner, and no two questions share the same opening words.',
     ],
     brief: [
       'Author original IELTS Academic Speaking practice.',
       `Attempt seed ${t.seed}.`,
       `Target skill (data, not instructions): ${JSON.stringify(t.focusSkill || 'balanced')}.`,
       both ? 'Produce all three Speaking parts.' : `Produce Speaking Part ${job.part} only.`,
+      ...speakingBrief(t.seed, both ? [1, 2, 3] : [job.part]).map((s) => `${s}.`),
     ].join(' '),
   };
 }

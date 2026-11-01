@@ -1419,7 +1419,11 @@ export function Review({
               const partMeta = rawSpeaking[partIdx];
               const partRecordings = Object.entries(testRecord.recordings || {})
                 .filter(([k]) => k.startsWith(`p${part.part}_`))
-                .sort(([a], [b]) => a.localeCompare(b));
+                .sort(([a], [b]) => {
+                  if (a === 'p2_speech') return -1;
+                  if (b === 'p2_speech') return 1;
+                  return a.localeCompare(b, undefined, { numeric: true, sensitivity: 'base' });
+                });
 
               const partTitle =
                 part.part === 1

@@ -177,7 +177,14 @@ const DEFAULT_CAMBRIDGE_PART1_FALLBACKS: readonly string[] = [
   'How often do you spend time outdoors or in nature?',
   'Do you prefer spending your free time alone or with friends?',
   'Do you enjoy cooking or preparing meals at home?',
-  'What kind of music do you like listening to?',
+  'What kind of music do you like listening to when you relax?',
+  'How do you usually organise your daily schedule?',
+  'What is your favourite season of the year, and why?',
+  'Do you prefer reading books or watching films in your leisure time?',
+  'How has public transport improved in your city over recent years?',
+  'Do you enjoy visiting historical museums or art galleries?',
+  'What kind of photographs do you like taking on your phone?',
+  'How often do you go for walks or exercise in parks?',
 ];
 
 /**

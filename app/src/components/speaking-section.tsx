@@ -15,6 +15,7 @@ import {
   filterAndPreparePart1Questions,
   cleanSpeakingQuestion,
 } from '../lib/examiners.ts';
+import { getDefaultSpeakingParts } from '../lib/variety.ts';
 import { Button } from './ui/button.tsx';
 
 interface SpeakingSectionProps {
@@ -22,6 +23,8 @@ interface SpeakingSectionProps {
   speakingParts: SpeakingPart[];
   initialMode?: 'timed' | 'untimed';
   initialNotes?: string[];
+  initialRecordings?: Record<string, Recording>;
+  initialTranscripts?: string[];
   onSaveAnswers: (transcripts: string[], recordings: Record<string, Recording>) => void;
   onFinish: () => void;
   onExit?: () => void;
@@ -65,6 +68,8 @@ export function SpeakingSection({
   speakingParts,
   initialMode = 'untimed',
   initialNotes = [],
+  initialRecordings = {},
+  initialTranscripts = [],
   onSaveAnswers,
   onFinish,
   onExit,
@@ -111,6 +116,15 @@ export function SpeakingSection({
   const [speechStatus, setSpeechStatus] = useState<'starting' | 'listening' | 'heard-speech' | 'ended'>('starting');
   const [audioSaveError, setAudioSaveError] = useState<string | null>(null);
 
+  // Initialize transcripts from initialTranscripts if provided
+  useEffect(() => {
+    if (initialTranscripts && initialTranscripts.length > 0 && Object.keys(transcriptsRef.current).length === 0) {
+      if (initialTranscripts[0]) transcriptsRef.current['p1_q0'] = initialTranscripts[0];
+      if (initialTranscripts[1]) transcriptsRef.current['p2_speech'] = initialTranscripts[1];
+      if (initialTranscripts[2]) transcriptsRef.current['p3_q0'] = initialTranscripts[2];
+    }
+  }, [initialTranscripts]);
+
   // Part 2 Prep & Notes
   const [prepNotes, setPrepNotes] = useState(initialNotes[0] || '');
   const [prepSecondsLeft, setPrepSecondsLeft] = useState(60);
@@ -118,7 +132,7 @@ export function SpeakingSection({
   const [questionElapsedS, setQuestionElapsedS] = useState(0);
 
   // Summary of recorded answers
-  const recordingsMapRef = useRef<Record<string, Recording>>({});
+  const recordingsMapRef = useRef<Record<string, Recording>>({ ...(initialRecordings || {}) });
   const allTranscriptsListRef = useRef<string[]>([]);
   const advanceStepRef = useRef<() => void>(() => {});
 
@@ -130,40 +144,21 @@ export function SpeakingSection({
     else if (step === 'part3') advanceStepRef.current = () => void advancePart3();
   });
 
-  // Parse Speaking parts
-  const part1Data = speakingParts.find((p) => p.part === 1) || {
-    part: 1,
-    prompt: "Let's talk about where you live or what you do.",
-    questions: [
-      'Do you work or are you a student?',
-      'What do you enjoy most about your work or studies?',
-      'Where is your hometown located?',
-      'What do you like most about living there?',
-    ],
-  };
+  // Fallback Speaking parts with rich seeded diversity across topics and question styles
+  const attemptNumericSeed = useMemo(() => {
+    let hash = 0;
+    for (let i = 0; i < attemptId.length; i++) {
+      hash = (hash << 5) - hash + attemptId.charCodeAt(i);
+      hash |= 0;
+    }
+    return Math.abs(hash);
+  }, [attemptId]);
 
-  const part2Data = speakingParts.find((p) => p.part === 2) || {
-    part: 2,
-    prompt: 'Describe a memorable journey you took by public transport.',
-    cue: [
-      'Where you went',
-      'What kind of transport you used',
-      'Who was with you',
-      'And explain why this journey was memorable to you',
-    ],
-    questions: ['Do you still make this journey?', 'Would you recommend this transport to others?'],
-  };
+  const fallbackParts = useMemo(() => getDefaultSpeakingParts(attemptNumericSeed), [attemptNumericSeed]);
 
-  const part3Data = speakingParts.find((p) => p.part === 3) || {
-    part: 3,
-    prompt: "We've been talking about travel and transport, and now I'd like to discuss broader transportation issues.",
-    questions: [
-      'How has public transport changed in your country over recent decades?',
-      'Do you think governments should invest more in trains rather than building more roads?',
-      'What environmental problems are caused by the increase in private car ownership?',
-      'How might technology change the way people commute in the future?',
-    ],
-  };
+  const part1Data = speakingParts.find((p) => p.part === 1) || fallbackParts[0]!;
+  const part2Data = speakingParts.find((p) => p.part === 2) || fallbackParts[1]!;
+  const part3Data = speakingParts.find((p) => p.part === 3) || fallbackParts[2]!;
 
   // Examiner Profile (randomized by attempt seed, matching authentic Cambridge Examiners)
   const examiner = useMemo(() => getExaminerForAttempt(attemptId), [attemptId]);
@@ -195,6 +190,7 @@ export function SpeakingSection({
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((tr) => tr.stop());
       }
+      syncAnswersToAttempt();
     };
   }, [stopExaminerAudio]);
 
@@ -256,48 +252,60 @@ export function SpeakingSection({
     audio.play();
   };
 
-  // Speak a question and then start recording candidate answer
-  const playQuestionAndListen = useCallback(
-    async (text: string, questionKey: string, onSpeechDone?: () => void) => {
-      stopExaminerAudio();
-      if (recorderRef.current) recorderRef.current.cancel();
-      if (recognitionRef.current) {
-        void recognitionRef.current.stop();
-        recognitionRef.current = null;
-      }
+  // Speak a question and then start recording candidate answer.
+  // A plain function (not useCallback) so it never captures a stale render; the token makes
+  // sure a late "examiner finished" callback cannot start recording for an old question.
+  const questionTokenRef = useRef(0);
+  const playQuestionAndListen = async (text: string, questionKey: string, onSpeechDone?: () => void) => {
+    const token = ++questionTokenRef.current;
+    stopExaminerAudio();
+    if (recorderRef.current) {
+      recorderRef.current.cancel();
+      recorderRef.current = null;
+    }
+    if (recognitionRef.current) {
+      void recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
 
-      setIsExaminerSpeaking(true);
-      setIsRecording(false);
-      setLiveTranscript('');
-      setQuestionElapsedS(0);
-      setCurrentQuestionKey(questionKey);
-      setSavedCurrentAudioDuration(null);
-      setSpeechRecognitionError(null);
+    setIsExaminerSpeaking(true);
+    setIsRecording(false);
+    setLiveTranscript('');
+    setQuestionElapsedS(0);
+    setCurrentQuestionKey(questionKey);
+    setSavedCurrentAudioDuration(null);
+    setSpeechRecognitionError(null);
 
-      const controller = await speakExaminerQuestion(
-        text,
-        () => setIsExaminerSpeaking(true),
-        () => {
-          setIsExaminerSpeaking(false);
-          // 0.5s pause before learner speaks per spec §6.7
-          setTimeout(() => {
-            startLearnerRecording(questionKey, onSpeechDone);
-          }, 500);
-        },
-        examiner.voiceId,
-      );
+    const controller = await speakExaminerQuestion(
+      text,
+      () => {
+        if (token === questionTokenRef.current) setIsExaminerSpeaking(true);
+      },
+      () => {
+        if (token !== questionTokenRef.current) return;
+        setIsExaminerSpeaking(false);
+        // 0.5s pause before learner speaks per spec §6.7
+        setTimeout(() => {
+          if (token === questionTokenRef.current) startLearnerRecording(questionKey, onSpeechDone);
+        }, 500);
+      },
+      examiner.voiceId,
+    );
 
-      examinerSpeechCancelRef.current = controller.cancel;
-    },
-    [stopExaminerAudio, examiner.voiceId],
-  );
+    // A newer question already cancelled this one via speakExaminerQuestion's single-flight guard.
+    if (token === questionTokenRef.current) examinerSpeechCancelRef.current = controller.cancel;
+  };
 
   // Persist one answer's audio; failures are surfaced instead of swallowed.
   const persistAnswerAudio = async (questionKey: string, blob: Blob, durationS: number) => {
+    if (!blob || blob.size === 0) {
+      setAudioSaveError('No audio was captured for this answer. Check that your microphone is not muted.');
+      return;
+    }
     try {
       const storageKey = await saveSpeakingAudioBlob(attemptId, partNumberForKey(questionKey), questionKey, 1, blob);
       // The recording key MUST be the real storage key so getSpeakingAudioBlob() can find it later.
-      recordingsMapRef.current[questionKey] = { key: storageKey, duration: durationS, createdAt: Date.now() };
+      recordingsMapRef.current[questionKey] = { key: storageKey, duration: Math.round(durationS * 10) / 10, createdAt: Date.now() };
       setAudioSaveError(null);
     } catch (err) {
       setAudioSaveError(`Audio for this answer could not be saved (${(err as Error).message || 'storage error'}).`);
@@ -309,6 +317,24 @@ export function SpeakingSection({
     const clean = text.trim();
     if (clean) transcriptsRef.current[questionKey] = clean;
     setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: transcriptsRef.current[questionKey] ?? '' }));
+  };
+
+  // Push every answer saved so far to the attempt store. Called after EACH answer, so recordings
+  // survive "Finish Test Early", "Exit", the player's own finish button, or a closed tab.
+  const onSaveAnswersRef = useRef(onSaveAnswers);
+  onSaveAnswersRef.current = onSaveAnswers;
+  const syncAnswersToAttempt = () => {
+    const t = transcriptsRef.current;
+    const ordered = (prefix: string) =>
+      Object.keys(t)
+        .filter((k) => k.startsWith(prefix))
+        .sort((a, b) => Number(a.slice(prefix.length)) - Number(b.slice(prefix.length)))
+        .map((k) => t[k] || '');
+    const p1 = ordered('p1_q');
+    const p2 = [t['p2_speech'] || '', ...ordered('p2_roundoff_')];
+    const p3 = ordered('p3_q');
+    const join = (parts: string[]) => parts.filter(Boolean).join(' ');
+    onSaveAnswersRef.current([join(p1), join(p2), join(p3)], { ...recordingsMapRef.current });
   };
 
   // Start recording the candidate's answer
@@ -355,6 +381,7 @@ export function SpeakingSection({
 
           await persistAnswerAudio(questionKey, blob, durationS);
           setSavedCurrentAudioDuration(durationS);
+          syncAnswersToAttempt();
 
           if (onAutoAdvance) {
             onAutoAdvance();
@@ -387,6 +414,7 @@ export function SpeakingSection({
 
     const fallback = liveTextRef.current.key === questionKey ? liveTextRef.current.text : '';
     commitTranscript(questionKey, spoken || fallback);
+    syncAnswersToAttempt();
     return { transcript: transcriptsRef.current[questionKey] ?? '', duration };
   };
 
@@ -394,6 +422,24 @@ export function SpeakingSection({
   const handleStopRecordingCurrent = async () => {
     if (!currentQuestionKey || !isRecording) return;
     await stopLearnerRecording(currentQuestionKey);
+  };
+
+  const handleFinishEarly = async () => {
+    stopExaminerAudio();
+    if (isRecording && currentQuestionKey) {
+      await stopLearnerRecording(currentQuestionKey);
+    }
+    syncAnswersToAttempt();
+    onFinish();
+  };
+
+  const handleExit = async () => {
+    stopExaminerAudio();
+    if (isRecording && currentQuestionKey) {
+      await stopLearnerRecording(currentQuestionKey);
+    }
+    syncAnswersToAttempt();
+    onExit?.();
   };
 
   // Timer for question elapsed
@@ -1259,7 +1305,7 @@ export function SpeakingSection({
           >
             <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
               {onExit && (
-                <Button variant="ghost" size="sm" onClick={onExit}>
+                <Button variant="ghost" size="sm" onClick={() => void handleExit()}>
                   Exit Interview
                 </Button>
               )}
@@ -1267,7 +1313,7 @@ export function SpeakingSection({
                 variant="outline"
                 size="sm"
                 icon="✓"
-                onClick={onFinish}
+                onClick={() => void handleFinishEarly()}
                 title="Finish speaking test early and proceed to diagnostic review"
               >
                 Finish Test Early
@@ -1307,7 +1353,7 @@ export function SpeakingSection({
 
               {step === 'part1' && (
                 <Button variant="primary" size="md" icon="→" onClick={advancePart1}>
-                  {part1Index + 1 < (part1Data.questions?.length || 4) ? 'Next Question →' : 'Complete Part 1 & Go to Part 2 →'}
+                  {part1Index + 1 < filteredPart1Questions.length ? 'Next Question →' : 'Complete Part 1 & Go to Part 2 →'}
                 </Button>
               )}
 
@@ -1342,7 +1388,7 @@ export function SpeakingSection({
 
               {step === 'part3' && (
                 <Button variant="primary" size="md" icon="✓" onClick={advancePart3}>
-                  {part3Index + 1 < (part3Data.questions?.length || 4) ? 'Next Discussion Question →' : 'Finish Speaking Test →'}
+                  {part3Index + 1 < (part3Data.questions?.length || 6) ? 'Next Discussion Question →' : 'Finish Speaking Test →'}
                 </Button>
               )}
             </div>
@@ -1372,7 +1418,15 @@ export function SpeakingSection({
           </p>
 
           <div style={{ display: 'flex', justifyContent: 'center', gap: 14 }}>
-            <Button variant="success" size="lg" icon="📊" onClick={onFinish}>
+            <Button
+              variant="success"
+              size="lg"
+              icon="📊"
+              onClick={() => {
+                syncAnswersToAttempt();
+                onFinish();
+              }}
+            >
               View Speaking Scores &amp; Review →
             </Button>
           </div>
