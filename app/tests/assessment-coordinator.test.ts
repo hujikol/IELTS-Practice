@@ -80,12 +80,14 @@ test('assessment-coordinator: attempted writing yields calculated writing band',
   };
 
   const report = await generateFinalReport(record, undefined, true);
-  assert.equal(report.modules.writing?.status, 'assessed');
-  assert.ok(typeof report.modules.writing?.band === 'number');
-  assert.ok(report.modules.writing!.band! > 0);
+  // With skipRemoteAI=true and no remote AI, writing is marked pending and band is null (never fabricated)
+  assert.equal(report.modules.writing?.status, 'pending');
+  assert.equal(report.modules.writing?.band, null);
+  assert.equal(report.review.writing.tasks.length, 2);
+  assert.equal(report.review.writing.tasks[0]?.status, 'unscored');
 });
 
-test('assessment-coordinator: attempted speaking yields calculated speaking band and criteria', async () => {
+test('assessment-coordinator: attempted speaking without AI yields pending status and null band', async () => {
   const data = emptyTest('full', 0, 'balanced', { provider: 'manual', model: 'mock', createdAt: Date.now() });
   data.speakingTexts = [
     'I live in a vibrant coastal city with excellent public transportation and a very welcoming community where people enjoy outdoor activities.',
@@ -108,11 +110,10 @@ test('assessment-coordinator: attempted speaking yields calculated speaking band
   };
 
   const report = await generateFinalReport(record, undefined, true);
-  assert.equal(report.modules.speaking?.status, 'assessed');
-  assert.ok(typeof report.modules.speaking?.band === 'number');
-  assert.ok(report.modules.speaking!.band! >= 5.0);
+  // With skipRemoteAI=true, speaking is marked pending and band is null (never fabricated)
+  assert.equal(report.modules.speaking?.status, 'pending');
+  assert.equal(report.modules.speaking?.band, null);
   assert.equal(report.review.speaking.parts.length, 3);
-  assert.ok(report.modules.speaking?.criteria?.FC! >= 5.0);
 });
 
 test('sanitizeAttemptRecord: clears fabricated writing and speaking scores from stale reports', () => {

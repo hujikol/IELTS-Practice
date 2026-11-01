@@ -97,7 +97,80 @@ export type VoiceMapEntry = {
   kind: 'dialogue' | 'monologue';
   woman?: string;
   man?: string;
+  narrator?: string;
 };
+
+/**
+ * Normalizes speaker role for any script turn.
+ * Ensures character dialogue lines are mapped to Woman/Man and instructor lines to Narrator.
+ */
+export function resolveTurnSpeaker(
+  speakerRaw?: string,
+  typeRaw?: string,
+  speakerIdRaw?: string,
+  turnIndex = 0,
+): 'woman' | 'man' | 'narrator' {
+  if (typeRaw === 'narrator' || typeRaw === 'instructor' || typeRaw === 'announcer') {
+    return 'narrator';
+  }
+  const s = (speakerRaw || '').trim().toLowerCase();
+  const id = (speakerIdRaw || '').trim().toLowerCase();
+
+  if (s === 'narrator' || s === 'instructor' || s === 'announcer' || s === 'examiner') {
+    return 'narrator';
+  }
+
+  // Woman / Female indicators
+  if (
+    s === 'woman' ||
+    s === 'female' ||
+    s.includes('woman') ||
+    s.includes('female') ||
+    s === 'speaker 1' ||
+    s === 'speaker1' ||
+    s === 'speaker_1' ||
+    s === 'speaker a' ||
+    s === 'person 1' ||
+    id.includes('female') ||
+    id.includes('_f_')
+  ) {
+    return 'woman';
+  }
+
+  // Man / Male indicators
+  if (
+    s === 'man' ||
+    s === 'male' ||
+    s.includes('man') ||
+    s.includes('male') ||
+    s === 'speaker 2' ||
+    s === 'speaker2' ||
+    s === 'speaker_2' ||
+    s === 'speaker b' ||
+    s === 'person 2' ||
+    id.includes('male') ||
+    id.includes('_m_')
+  ) {
+    return 'man';
+  }
+
+  // Alternating default for dialogue turns
+  return turnIndex % 2 === 0 ? 'man' : 'woman';
+}
+
+/**
+ * Strips leaked speaker name/role prefixes (e.g. "Woman:", "Man:", "Speaker 1:")
+ * so synthesized audio does not read out the speaker's name or jumble the narration.
+ */
+export function cleanScriptTurnText(text: string): string {
+  if (!text) return '';
+  return text
+    .replace(
+      /^\[?(?:woman|man|narrator|instructor|speaker\s*[12ab]|person\s*[12ab]|receptionist|student|customer|officer|advisor|interviewer|candidate)\]?:\s*/i,
+      '',
+    )
+    .trim();
+}
 
 /**
  * Randomize speaker voices across all listening parts, guaranteeing distinct
@@ -159,9 +232,28 @@ export function voiceForPart(
   part: number,
   speaker: 'woman' | 'man' | 'narrator',
 ): string {
-  if (speaker === 'narrator') return NARRATOR_VOICE;
   const entry = map[String(part)];
   if (!entry) return NARRATOR_VOICE;
+
+  if (speaker === 'narrator') {
+    if (entry.narrator) return entry.narrator;
+    if (entry.kind === 'dialogue') {
+      const set = DIALOGUE_SETS.find((d) => d.id === entry.set_id);
+      const womanVoice = entry.woman || set?.woman;
+      const manVoice = entry.man || set?.man;
+      // Guarantee the instructor/narrator is a 3rd distinct voice
+      if (womanVoice === NARRATOR_VOICE || manVoice === NARRATOR_VOICE) {
+        return womanVoice === 'bf_alice' || manVoice === 'bf_alice' ? 'bm_fable' : 'bf_alice';
+      }
+      return NARRATOR_VOICE;
+    }
+    // Monologue: ensure narrator differs from the speaker
+    if (entry.set_id === NARRATOR_VOICE) {
+      return 'bf_alice';
+    }
+    return NARRATOR_VOICE;
+  }
+
   if (entry.kind === 'monologue') return entry.set_id;
   if (entry.woman && speaker === 'woman') return entry.woman;
   if (entry.man && speaker === 'man') return entry.man;

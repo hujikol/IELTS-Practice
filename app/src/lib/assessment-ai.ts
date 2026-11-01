@@ -1,7 +1,12 @@
 // §5.2, §5.3, §7, §8.3: AI-Assisted Assessment, Reviews, Rewrites & Weakness Narratives
 // Hard Rule: Code computes every number. AI evaluates qualitative text with strict quote verification.
 
-import { callProviderChat, type ProviderConfig } from './providers.ts';
+import {
+  callProviderChat,
+  callProviderScoring,
+  parseTolerantJson,
+  type ProviderConfig,
+} from './providers.ts';
 import {
   verifyQuoteSubstring,
   type Aggregates,
@@ -12,6 +17,10 @@ import {
   type WeaknessProfile,
 } from './scoring.ts';
 import { roundToHalfBand } from './bands.ts';
+import { scoreWritingTask, type WritingScoringResult, validateIeltsBand } from './writing-score.ts';
+
+export type { WritingScoringResult };
+export { validateIeltsBand };
 
 // ─── Section 7.1 Objective Personal Notes ───
 
@@ -64,36 +73,6 @@ Return JSON: [{ "item_id": "", "personal_note": "" }]`;
 
 // ─── Section 5.2 & 7.2 Writing Scoring & Better Answers ───
 
-export type WritingScoringResult = {
-  task: 1 | 2;
-  band: number;
-  criteria: {
-    task_response: { band: number; evidence: { quote: string; comment: string }[]; next_band_gap: string };
-    coherence: { band: number; evidence: { quote: string; comment: string }[]; next_band_gap: string };
-    lexical: { band: number; evidence: { quote: string; comment: string }[]; next_band_gap: string };
-    grammar: { band: number; evidence: { quote: string; comment: string }[]; next_band_gap: string };
-  };
-  errors: {
-    span: string;
-    start: number;
-    end: number;
-    category: string;
-    correction: string;
-    explanation: string;
-    severity: 'minor' | 'major';
-  }[];
-  missing_key_features?: string[];
-  factual_misreads?: { learner_claim: string; actual: string }[];
-  strengths: string[];
-  priority_fixes: string[];
-  confidence: 'high' | 'medium' | 'low';
-  upgrade_rewrite?: {
-    original_paragraphs: string[];
-    rewritten_paragraphs: string[];
-    annotations: { original: string; improved: string; reason: string; criterion: string }[];
-  };
-};
-
 export async function scoreWritingTaskWithAI(
   taskNumber: 1 | 2,
   promptText: string,
@@ -103,120 +82,40 @@ export async function scoreWritingTaskWithAI(
   durationS: number,
   config: ProviderConfig,
 ): Promise<WritingScoringResult> {
-  const wordCount = learnerText.trim() ? learnerText.trim().split(/\s+/).length : 0;
-  const minimumWords = taskNumber === 1 ? 150 : 250;
-
-  // Fallback heuristic scoring if AI is disabled or fails
-  const fallbackBand = wordCount >= minimumWords ? 6.0 : wordCount >= minimumWords * 0.75 ? 5.0 : 4.0;
-  const fallbackResult: WritingScoringResult = {
-    task: taskNumber,
-    band: fallbackBand,
-    criteria: {
-      task_response: {
-        band: fallbackBand,
-        evidence: [{ quote: learnerText.slice(0, 50), comment: 'Word count evaluated against threshold.' }],
-        next_band_gap: 'Extend analysis and provide more precise evidence.',
-      },
-      coherence: { band: fallbackBand, evidence: [], next_band_gap: 'Use varied cohesive devices.' },
-      lexical: { band: fallbackBand, evidence: [], next_band_gap: 'Incorporate academic collocations.' },
-      grammar: { band: fallbackBand, evidence: [], next_band_gap: 'Maintain sentence structure accuracy.' },
-    },
-    errors: [],
-    strengths: ['Addressed the prompt topic directly.', 'Completed the writing task within time.'],
-    priority_fixes: ['Expand vocabulary range and check subject-verb agreement.'],
-    confidence: 'low',
-  };
-
-  if (!config.enabled || !learnerText.trim()) return fallbackResult;
-
-  const systemPrompt = `You are a certified IELTS examiner. Score ONLY the response below using the public band descriptors.
-Score each criterion in 0.5 steps. Be conservative: when between two bands choose the lower unless the higher is clearly supported by quoted evidence.
-Task 1 criteria: Task Achievement, Coherence & Cohesion, Lexical Resource, Grammatical Range & Accuracy.
-Task 2 criteria: Task Response, Coherence & Cohesion, Lexical Resource, Grammatical Range & Accuracy.
-FACTS (computed by code, do not recount): word_count=${wordCount}, minimum=${minimumWords}, time_used=${durationS}s.
-Under-length, off-topic or memorised responses must be capped per the descriptors.
-${taskNumber === 1 ? `VISUAL DATA SPEC: ${visualSpecJson || 'N/A'}\nEXPECTED KEY FEATURES: ${JSON.stringify(keyFeatures)}` : ''}
-For each criterion give a band, 2+ evidence quotes with comments, and the specific gap to the next half band.
-Then list errors (span, category, correction, severity), strengths, and priority fixes.
-Return JSON only.`;
-
-  const userPrompt = `PROMPT:\n${promptText}\n\nLEARNER TEXT:\n${learnerText}`;
-
-  try {
-    const res = await callProviderChat(`${systemPrompt}\n\n${userPrompt}`, config, { timeoutMs: 25000 });
-    const parsed = JSON.parse(res.content);
-
-    // Compute task band by code as mean of 4 criteria rounded to 0.5 (§5.2)
-    const crit = parsed.criteria || {};
-    const tr = Number(crit.task_response?.band ?? crit.task_achievement?.band ?? 6.0);
-    const cc = Number(crit.coherence?.band ?? 6.0);
-    const lr = Number(crit.lexical?.band ?? 6.0);
-    const gra = Number(crit.grammar?.band ?? 6.0);
-    const calculatedTaskBand = roundToHalfBand((tr + cc + lr + gra) / 4);
-
-    // Verify all quoted evidence against learner text (§2 Hard Rule 3)
-    const verifiedErrors = Array.isArray(parsed.errors)
-      ? parsed.errors.filter((err: { span: string }) => {
-          if (!err.span) return false;
-          return verifyQuoteSubstring(err.span, learnerText).valid;
-        })
-      : [];
-
-    return {
-      task: taskNumber,
-      band: calculatedTaskBand,
-      criteria: {
-        task_response: {
-          band: tr,
-          evidence: Array.isArray(crit.task_response?.evidence) ? crit.task_response.evidence : [],
-          next_band_gap: crit.task_response?.next_band_gap || '',
-        },
-        coherence: {
-          band: cc,
-          evidence: Array.isArray(crit.coherence?.evidence) ? crit.coherence.evidence : [],
-          next_band_gap: crit.coherence?.next_band_gap || '',
-        },
-        lexical: {
-          band: lr,
-          evidence: Array.isArray(crit.lexical?.evidence) ? crit.lexical.evidence : [],
-          next_band_gap: crit.lexical?.next_band_gap || '',
-        },
-        grammar: {
-          band: gra,
-          evidence: Array.isArray(crit.grammar?.evidence) ? crit.grammar.evidence : [],
-          next_band_gap: crit.grammar?.next_band_gap || '',
-        },
-      },
-      errors: verifiedErrors,
-      missing_key_features: Array.isArray(parsed.missing_key_features) ? parsed.missing_key_features : [],
-      factual_misreads: Array.isArray(parsed.factual_misreads) ? parsed.factual_misreads : [],
-      strengths: Array.isArray(parsed.strengths) && parsed.strengths.length ? parsed.strengths : fallbackResult.strengths,
-      priority_fixes: Array.isArray(parsed.priority_fixes) && parsed.priority_fixes.length ? parsed.priority_fixes : fallbackResult.priority_fixes,
-      confidence: parsed.confidence === 'high' ? 'high' : parsed.confidence === 'medium' ? 'medium' : 'low',
-    };
-  } catch (err) {
-    console.error('[IELTS Studio] Writing assessment AI error:', (err as Error).message);
-    return fallbackResult;
-  }
+  return scoreWritingTask(
+    taskNumber,
+    promptText,
+    visualSpecJson,
+    keyFeatures,
+    learnerText,
+    durationS,
+    config,
+  );
 }
 
 // ─── Section 5.3 & 7.3 Speaking Scoring & Metrics ───
+
+export function areWordTimingsReal(words: { w: string; start: number; end: number; conf: number }[]): boolean {
+  if (!words || words.length === 0) return false;
+  if (words.length >= 2) {
+    const isSynthetic = words.every(
+      (w, i) =>
+        Math.abs(w.end - w.start - 0.4) < 0.001 &&
+        Math.abs(w.conf - 0.95) < 0.001 &&
+        Math.abs(w.start - i * 0.4) < 0.001,
+    );
+    if (isSynthetic) return false;
+  }
+  return true;
+}
 
 export function calculateSpeechMetrics(
   words: { w: string; start: number; end: number; conf: number }[],
   durationS: number,
   expectedDurationS = 120,
-): SpeechMetrics {
-  if (words.length === 0 || durationS <= 0) {
-    return {
-      words_per_minute: 0,
-      mean_length_of_run: 0,
-      pause_count_over_1s: 0,
-      filler_rate: 0,
-      self_repair_count: 0,
-      speaking_time_vs_expected: 0,
-      type_token_ratio: 0,
-    };
+): SpeechMetrics | null {
+  if (!words || words.length === 0 || durationS <= 0 || !areWordTimingsReal(words)) {
+    return null;
   }
 
   const durationMin = durationS / 60;
@@ -281,12 +180,15 @@ export function calculateSpeechMetrics(
 
 export type SpeakingScoringResult = {
   part: 1 | 2 | 3;
-  band: number;
+  status: 'scored' | 'unscored';
+  unscored_reason?: 'ai_disabled' | 'ai_error' | 'too_short' | 'not_attempted' | 'no_transcript';
+  unscored_detail?: string;
+  band: number | null;
   criteria: {
-    FC: { band: number; comment?: string; next_band_gap: string };
-    LR: { band: number; comment?: string; next_band_gap: string };
-    GRA: { band: number; comment?: string; next_band_gap: string };
-    PR: { band: number; comment?: string; next_band_gap: string };
+    FC?: { band: number; comment?: string; next_band_gap: string };
+    LR?: { band: number; comment?: string; next_band_gap: string };
+    GRA?: { band: number; comment?: string; next_band_gap: string };
+    PR?: { band: number; comment?: string; next_band_gap: string };
   };
   highlights: { span: string; type: 'filler' | 'repair' | 'word_choice'; note: string }[];
   improved_answer?: string;
@@ -304,110 +206,174 @@ export async function scoreSpeakingWithAI(
   durationS: number,
   config: ProviderConfig,
 ): Promise<SpeakingScoringResult> {
-  const wordCount = transcript.trim() ? transcript.trim().split(/\s+/).filter(Boolean).length : 0;
-  const targetWords = partNum === 2 ? 140 : 60;
-  const fallbackBand = wordCount >= targetWords ? 6.5 : wordCount >= 30 ? 6.0 : wordCount >= 15 ? 5.0 : 4.0;
+  const trimmed = transcript.trim();
+  const words = trimmed ? trimmed.split(/\s+/).filter(Boolean) : [];
+  const wordCount = words.length;
 
-  const fallbackResult: SpeakingScoringResult = {
-    part: partNum,
-    band: fallbackBand,
-    criteria: {
-      FC: { band: fallbackBand, comment: `Spoke ${wordCount} words. Fluency maintained with occasional hesitation.`, next_band_gap: 'Speak with fewer mid-sentence pauses.' },
-      LR: { band: fallbackBand, comment: 'Sufficient vocabulary to discuss the given topic.', next_band_gap: 'Incorporate idiomatic expressions and less common collocations.' },
-      GRA: { band: fallbackBand, comment: 'Mix of simple and basic compound forms.', next_band_gap: 'Use a wider variety of complex structures with accuracy.' },
-      PR: { band: fallbackBand, comment: 'Generally clear speech rhythm and phonemic accuracy.', next_band_gap: 'Work on expressive intonation and word stress.' },
-    },
-    highlights: [
-      { span: 'um, like', type: 'filler', note: 'Minimize conversational fillers when formulating complex ideas.' },
-    ],
-    improved_answer: transcript
-      ? `In response to this prompt, I would definitely emphasize that the primary factor lies in consistent daily engagement. While initial challenges are common, systematic adaptation invariably produces measurable progress.`
-      : undefined,
-    vocab_upgrades: [
-      { original: 'very good', upgraded: 'exceptionally beneficial', context: 'qualitative description' },
-      { original: 'big problem', upgraded: 'formidable impediment', context: 'challenge description' },
-      { original: 'I think', upgraded: 'from my perspective', context: 'opinion framing' },
-      { original: 'a lot of', upgraded: 'a substantial array of', context: 'quantity emphasis' },
-    ],
-    cue_card_outline: partNum === 2
-      ? [
-          'Introduction: Clearly name and introduce the topic/experience',
-          'Context: Where, when, and under what circumstances you encountered it',
-          'Core explanation: Key characteristics and defining memories',
-          'Reflection: Why this experience remains significant to you today',
-        ]
-      : undefined,
-    strengths: wordCount >= 30 ? [`Sustained speech with ${wordCount} words on the target topic.`] : ['Directly attempted the interview prompt.'],
-    priority_fixes: ['Expand answer length and use more topic-specific lexical items.'],
-    confidence: 'low',
-  };
+  if (wordCount === 0) {
+    return {
+      part: partNum,
+      status: 'unscored',
+      unscored_reason: 'no_transcript',
+      unscored_detail: 'No spoken transcript available for this part.',
+      band: null,
+      criteria: {},
+      highlights: [],
+      vocab_upgrades: [],
+      strengths: [],
+      priority_fixes: [],
+      confidence: 'low',
+    };
+  }
 
-  if (!config.enabled || wordCount < 10) return fallbackResult;
+  if (wordCount < 10) {
+    return {
+      part: partNum,
+      status: 'unscored',
+      unscored_reason: 'too_short',
+      unscored_detail: `Spoken response too short (${wordCount} words; at least 10 words required).`,
+      band: null,
+      criteria: {},
+      highlights: [],
+      vocab_upgrades: [],
+      strengths: [],
+      priority_fixes: ['Speak at greater length with more detailed responses.'],
+      confidence: 'low',
+    };
+  }
+
+  if (!config.enabled) {
+    return {
+      part: partNum,
+      status: 'unscored',
+      unscored_reason: 'ai_disabled',
+      unscored_detail: 'AI scoring is not configured or disabled.',
+      band: null,
+      criteria: {},
+      highlights: [],
+      vocab_upgrades: [],
+      strengths: [],
+      priority_fixes: [],
+      confidence: 'low',
+    };
+  }
 
   const systemPrompt = `You are a certified IELTS Speaking examiner.
 Score ONLY the candidate transcript below using authentic Cambridge IELTS band descriptors across 4 criteria:
 1. Fluency & Coherence (FC)
 2. Lexical Resource (LR)
 3. Grammatical Range & Accuracy (GRA)
-4. Pronunciation (PR) (estimated from natural rhythm, word links, and discourse markers)
+4. Pronunciation (PR) (estimated from natural rhythm, word links, and discourse markers; note that audio acoustic model is unavailable)
 
 FACTS: part=${partNum}, word_count=${wordCount}, duration_seconds=${durationS}.
 Score each criterion in 0.5 increments (e.g. 5.5, 6.0, 6.5, 7.0).
-Provide:
-- criteria: {
-    FC: { band, comment, next_band_gap },
-    LR: { band, comment, next_band_gap },
-    GRA: { band, comment, next_band_gap },
-    PR: { band, comment, next_band_gap }
-  }
-- improved_answer: A natural, spoken Band 8.0-8.5 model response answering the prompt
-- vocab_upgrades: 3-5 objects with { original, upgraded, context } replacing basic wording from the candidate's speech
-- highlights: 1-3 objects with { span, type: "filler"|"repair"|"word_choice", note } where span is a substring in the transcript
-- strengths: 2 bullet points
-- priority_fixes: 2 concrete actionable improvements
-${partNum === 2 ? '- cue_card_outline: 4 structural points for a 2-minute monologue' : ''}
-Return JSON only.`;
+Return JSON matching this schema with no markdown wrapping:
+{
+  "criteria": {
+    "FC": { "band": number, "comment": string, "next_band_gap": string },
+    "LR": { "band": number, "comment": string, "next_band_gap": string },
+    "GRA": { "band": number, "comment": string, "next_band_gap": string },
+    "PR": { "band": number, "comment": string, "next_band_gap": string }
+  },
+  "improved_answer": string,
+  "vocab_upgrades": [{ "original": string, "upgraded": string, "context": string }],
+  "highlights": [{ "span": string, "type": "filler"|"repair"|"word_choice", "note": string }],
+  "strengths": [string, string],
+  "priority_fixes": [string, string]${partNum === 2 ? ',\n  "cue_card_outline": [string, string, string, string]' : ''}
+}`;
 
-  const userPrompt = `INTERVIEW PROMPT:\n${promptText}\n\nCANDIDATE SPOKEN TRANSCRIPT:\n${transcript}`;
+  const userPrompt = `INTERVIEW PROMPT:\n${promptText}\n\nCANDIDATE SPOKEN TRANSCRIPT:\n${trimmed}`;
 
   try {
-    const res = await callProviderChat(`${systemPrompt}\n\n${userPrompt}`, config, { timeoutMs: 20000 });
-    const parsed = JSON.parse(res.content);
+    const res = await callProviderScoring(userPrompt, config, {
+      systemInstruction: systemPrompt,
+      temperature: 0,
+      timeoutMs: 45000,
+    });
+    const parsed = parseTolerantJson<Record<string, unknown>>(res.content);
 
-    const crit = parsed.criteria || {};
-    const fc = Number(crit.FC?.band ?? crit.fluency?.band ?? fallbackBand);
-    const lr = Number(crit.LR?.band ?? crit.lexical?.band ?? fallbackBand);
-    const gra = Number(crit.GRA?.band ?? crit.grammar?.band ?? fallbackBand);
-    const pr = Number(crit.PR?.band ?? crit.pronunciation?.band ?? fallbackBand);
+    const rawCrit = (parsed.criteria as Record<string, Record<string, unknown>>) || {};
+    const fc = validateIeltsBand(rawCrit.FC?.band ?? rawCrit.fluency?.band);
+    const lr = validateIeltsBand(rawCrit.LR?.band ?? rawCrit.lexical?.band);
+    const gra = validateIeltsBand(rawCrit.GRA?.band ?? rawCrit.grammar?.band);
+    const pr = validateIeltsBand(rawCrit.PR?.band ?? rawCrit.pronunciation?.band);
+
+    if (fc === null || lr === null || gra === null || pr === null) {
+      throw new Error('AI response did not contain valid 0.0-9.0 bands for speaking criteria.');
+    }
+
     const calculatedBand = roundToHalfBand((fc + lr + gra + pr) / 4);
 
     const verifiedHighlights = Array.isArray(parsed.highlights)
-      ? parsed.highlights.filter((h: { span: string }) => {
-          if (!h.span) return false;
-          return verifyQuoteSubstring(h.span, transcript).valid;
-        })
-      : fallbackResult.highlights;
+      ? (parsed.highlights as { span?: string; type?: string; note?: string }[])
+          .filter((h) => {
+            if (!h || !h.span) return false;
+            return verifyQuoteSubstring(h.span, trimmed).valid;
+          })
+          .map((h) => ({
+            span: String(h.span),
+            type: (h.type === 'repair' || h.type === 'word_choice' ? h.type : 'filler') as 'filler' | 'repair' | 'word_choice',
+            note: String(h.note || ''),
+          }))
+      : [];
 
     return {
       part: partNum,
+      status: 'scored',
       band: calculatedBand,
       criteria: {
-        FC: { band: fc, comment: crit.FC?.comment || crit.fluency?.comment || '', next_band_gap: crit.FC?.next_band_gap || crit.fluency?.next_band_gap || '' },
-        LR: { band: lr, comment: crit.LR?.comment || crit.lexical?.comment || '', next_band_gap: crit.LR?.next_band_gap || crit.lexical?.next_band_gap || '' },
-        GRA: { band: gra, comment: crit.GRA?.comment || crit.grammar?.comment || '', next_band_gap: crit.GRA?.next_band_gap || crit.grammar?.next_band_gap || '' },
-        PR: { band: pr, comment: crit.PR?.comment || crit.pronunciation?.comment || '', next_band_gap: crit.PR?.next_band_gap || crit.pronunciation?.next_band_gap || '' },
+        FC: {
+          band: fc,
+          comment: String(rawCrit.FC?.comment || rawCrit.fluency?.comment || ''),
+          next_band_gap: String(rawCrit.FC?.next_band_gap || rawCrit.fluency?.next_band_gap || ''),
+        },
+        LR: {
+          band: lr,
+          comment: String(rawCrit.LR?.comment || rawCrit.lexical?.comment || ''),
+          next_band_gap: String(rawCrit.LR?.next_band_gap || rawCrit.lexical?.next_band_gap || ''),
+        },
+        GRA: {
+          band: gra,
+          comment: String(rawCrit.GRA?.comment || rawCrit.grammar?.comment || ''),
+          next_band_gap: String(rawCrit.GRA?.next_band_gap || rawCrit.grammar?.next_band_gap || ''),
+        },
+        PR: {
+          band: pr,
+          comment: String(rawCrit.PR?.comment || rawCrit.pronunciation?.comment || 'Estimated from transcript discourse rhythm.'),
+          next_band_gap: String(rawCrit.PR?.next_band_gap || rawCrit.pronunciation?.next_band_gap || ''),
+        },
       },
-      highlights: verifiedHighlights.length ? verifiedHighlights : fallbackResult.highlights,
-      improved_answer: typeof parsed.improved_answer === 'string' && parsed.improved_answer.trim() ? parsed.improved_answer.trim() : fallbackResult.improved_answer,
-      vocab_upgrades: Array.isArray(parsed.vocab_upgrades) && parsed.vocab_upgrades.length ? parsed.vocab_upgrades : fallbackResult.vocab_upgrades,
-      cue_card_outline: partNum === 2 && Array.isArray(parsed.cue_card_outline) ? parsed.cue_card_outline : fallbackResult.cue_card_outline,
-      strengths: Array.isArray(parsed.strengths) && parsed.strengths.length ? parsed.strengths : fallbackResult.strengths,
-      priority_fixes: Array.isArray(parsed.priority_fixes) && parsed.priority_fixes.length ? parsed.priority_fixes : fallbackResult.priority_fixes,
-      confidence: 'medium',
+      highlights: verifiedHighlights,
+      improved_answer:
+        typeof parsed.improved_answer === 'string' && parsed.improved_answer.trim()
+          ? parsed.improved_answer.trim()
+          : undefined,
+      vocab_upgrades: Array.isArray(parsed.vocab_upgrades)
+        ? (parsed.vocab_upgrades as { original: string; upgraded: string; context: string }[])
+        : [],
+      cue_card_outline:
+        partNum === 2 && Array.isArray(parsed.cue_card_outline)
+          ? (parsed.cue_card_outline as string[])
+          : undefined,
+      strengths: Array.isArray(parsed.strengths) ? (parsed.strengths as string[]) : [],
+      priority_fixes: Array.isArray(parsed.priority_fixes) ? (parsed.priority_fixes as string[]) : [],
+      confidence: wordCount >= 60 ? 'high' : 'medium',
     };
   } catch (err) {
-    console.warn('[IELTS Studio] Speaking AI evaluation error or timeout:', (err as Error).message);
-    return fallbackResult;
+    console.warn('[IELTS Studio] Speaking AI evaluation error:', (err as Error).message);
+    return {
+      part: partNum,
+      status: 'unscored',
+      unscored_reason: 'ai_error',
+      unscored_detail: (err as Error).message || 'Speaking evaluation failed.',
+      band: null,
+      criteria: {},
+      highlights: [],
+      vocab_upgrades: [],
+      strengths: [],
+      priority_fixes: [],
+      confidence: 'low',
+    };
   }
 }
 

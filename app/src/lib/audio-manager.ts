@@ -2,7 +2,13 @@
 // Configures on-device neural TTS models (Kokoro FP32, Q8, Q4, or Web Speech API fallback)
 // and manages offline storage, IndexedDB audio caching, and cache clearing.
 
-import { voiceForPart, NARRATOR_VOICE, type VoiceMapEntry } from './voices.ts';
+import {
+  voiceForPart,
+  NARRATOR_VOICE,
+  resolveTurnSpeaker,
+  cleanScriptTurnText,
+  type VoiceMapEntry,
+} from './voices.ts';
 import type { SpeakingPart } from './types.ts';
 import { filterAndPreparePart1Questions, cleanSpeakingQuestion } from './examiners.ts';
 
@@ -576,6 +582,8 @@ export async function pregenerateSpeakingAudio(
     onProgress?.(i + 1, total, prompt.slice(0, 30));
     try {
       await synthesizeSpeechAudio(prompt, examinerVoiceId, 1.0, modelId);
+      // Yield 50ms between clips to allow event loop repainting and prevent UI freezing on <= 8GB RAM devices
+      await new Promise((resolve) => setTimeout(resolve, 50));
     } catch (err) {
       console.warn(`[IELTS Studio] Warning: Pre-rendering speaking examiner prompt ${i + 1} failed:`, err);
     }
@@ -808,6 +816,9 @@ export async function synthesizeSpeechAudio(
     return new Blob([], { type: 'audio/wav' });
   }
 
+  // Yield to browser event loop before tensor computation so UI doesn't hang
+  await new Promise((resolve) => setTimeout(resolve, 15));
+
   const rawAudio = await model.generate(clean, {
     voice: voiceId,
     speed,
@@ -843,18 +854,15 @@ export async function pregenerateListeningAudio(
 
   for (let i = 0; i < total; i++) {
     const line = validLines[i]!;
-    const speakerType =
-      line.speaker === 'woman' || /female|_f_/i.test(line.speaker || '')
-        ? 'woman'
-        : line.speaker === 'man' || /male|_m_/i.test(line.speaker || '')
-          ? 'man'
-          : 'narrator';
-
+    const cleanText = cleanScriptTurnText(line.text || '');
+    const speakerType = resolveTurnSpeaker(line.speaker, undefined, undefined, i);
     const voiceId = voiceForPart(voiceMap, partNumber, speakerType);
-    onProgress?.(i + 1, total, line.text!.slice(0, 30));
+    onProgress?.(i + 1, total, cleanText.slice(0, 30));
 
     try {
-      await synthesizeSpeechAudio(line.text!, voiceId, 1.0, modelId);
+      await synthesizeSpeechAudio(cleanText, voiceId, 1.0, modelId);
+      // Yield 60ms between dialogue lines to allow event loop DOM repainting and prevent freezing
+      await new Promise((resolve) => setTimeout(resolve, 60));
     } catch (err) {
       console.warn(`[IELTS Studio] Warning: Pre-rendering voice line ${i + 1} failed:`, err);
     }

@@ -268,6 +268,7 @@ export type FinalReport = {
   };
   aggregates: Aggregates;
   weakness_profile: WeaknessProfile;
+  rubric_version?: string;
   review: {
     listening: ItemReview[];
     reading: ItemReview[];
@@ -275,7 +276,9 @@ export type FinalReport = {
     writing: {
       tasks: {
         task: 1 | 2;
-        band: number;
+        band: number | null;
+        status?: 'scored' | 'unscored';
+        unscored_reason?: string;
         criteria: Record<string, { band: number; evidence: { quote: string; comment: string }[]; next_band_gap: string }>;
         errors: {
           span: string;
@@ -306,6 +309,8 @@ export type FinalReport = {
       parts: {
         part: 1 | 2 | 3;
         transcript: string;
+        status?: 'scored' | 'unscored';
+        unscored_reason?: string;
         highlights: { span: string; type: 'filler' | 'repair' | 'word_choice'; note: string }[];
         metrics?: {
           words_per_minute: number;
@@ -320,6 +325,8 @@ export type FinalReport = {
         vocab_upgrades: { original: string; upgraded: string; context: string }[];
         pronunciation_words?: { word: string; tip: string }[];
         cue_card_outline?: string[];
+        strengths?: string[];
+        priority_fixes?: string[];
       }[];
     };
   };

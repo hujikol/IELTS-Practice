@@ -389,7 +389,7 @@ export type SavePatchInput = {
   attempt_id: string;
   expected_revision: number;
   /** Allowlisted fields only. Native rejects anything outside this set. */
-  patch: Partial<Pick<TestData, 'responses' | 'texts' | 'speakingTexts' | 'notes' | 'marked' | 'audioPlayed' | 'audioDurations'>> & {
+  patch: Partial<Pick<TestData, 'responses' | 'texts' | 'speakingTexts' | 'recordings' | 'notes' | 'marked' | 'audioPlayed' | 'audioDurations'>> & {
     timer?: { remaining: number; running: boolean; checkpoint: number };
   };
 };

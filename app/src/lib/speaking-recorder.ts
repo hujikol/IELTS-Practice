@@ -238,7 +238,7 @@ function openSpeakingDb(): Promise<IDBDatabase> {
   });
 }
 
-/** Save recorded voice clip into IndexedDB */
+/** Save recorded voice clip into IndexedDB. Throws on failure so callers can tell the user. */
 export async function saveSpeakingAudioBlob(
   attemptId: string,
   part: number,
@@ -247,18 +247,16 @@ export async function saveSpeakingAudioBlob(
   blob: Blob,
 ): Promise<string> {
   const storageKey = `speaking_${attemptId}_p${part}_q${questionId}_take${take}`;
-  try {
-    const db = await openSpeakingDb();
-    return new Promise((resolve, reject) => {
-      const tx = db.transaction(SPEAKING_STORE_NAME, 'readwrite');
-      const store = tx.objectStore(SPEAKING_STORE_NAME);
-      const req = store.put(blob, storageKey);
-      req.onsuccess = () => resolve(storageKey);
-      req.onerror = () => reject(req.error);
-    });
-  } catch {
-    return storageKey;
-  }
+  const db = await openSpeakingDb();
+  return new Promise((resolve, reject) => {
+    const tx = db.transaction(SPEAKING_STORE_NAME, 'readwrite');
+    const store = tx.objectStore(SPEAKING_STORE_NAME);
+    const req = store.put(blob, storageKey);
+    req.onerror = () => reject(req.error);
+    tx.oncomplete = () => resolve(storageKey);
+    tx.onerror = () => reject(tx.error);
+    tx.onabort = () => reject(tx.error ?? new Error('Audio save was aborted.'));
+  });
 }
 
 /** Retrieve recorded voice clip from IndexedDB */
@@ -283,87 +281,171 @@ export async function getSpeakingAudioBlob(storageKey: string): Promise<Blob | n
   }
 }
 
-/** Check whether live speech recognition is supported in current browser */
-export function isSpeechRecognitionSupported(): boolean {
-  if (typeof window === 'undefined') return false;
-  return Boolean(
-    (window as unknown as { SpeechRecognition?: any }).SpeechRecognition ||
-    (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition,
-  );
+/** Minimal typing for the (non-standard) Web Speech API surface we use. */
+type SpeechResultItem = { transcript: string };
+type SpeechResultLike = { isFinal: boolean; 0?: SpeechResultItem; length?: number };
+type SpeechResultEventLike = { results: ArrayLike<SpeechResultLike>; resultIndex?: number };
+interface SpeechRecognitionLike {
+  continuous: boolean;
+  interimResults: boolean;
+  lang: string;
+  onstart: ((e: unknown) => void) | null;
+  onspeechstart: ((e: unknown) => void) | null;
+  onresult: ((e: SpeechResultEventLike) => void) | null;
+  onerror: ((e: { error?: string }) => void) | null;
+  onend: ((e: unknown) => void) | null;
+  start: () => void;
+  stop: () => void;
+}
+type SpeechRecognitionCtor = new () => SpeechRecognitionLike;
+
+function getSpeechRecognitionClass(): SpeechRecognitionCtor | null {
+  if (typeof window === 'undefined') return null;
+  const w = window as unknown as {
+    SpeechRecognition?: SpeechRecognitionCtor;
+    webkitSpeechRecognition?: SpeechRecognitionCtor;
+  };
+  return w.SpeechRecognition || w.webkitSpeechRecognition || null;
 }
 
+/** Check whether live speech recognition is supported in current browser */
+export function isSpeechRecognitionSupported(): boolean {
+  return getSpeechRecognitionClass() !== null;
+}
+
+export type LiveRecognizer = {
+  /** Stops listening and resolves with the full transcript, INCLUDING the trailing final result
+   *  that browsers deliver only after stop() is called. Never rejects. */
+  stop: () => Promise<string>;
+  /** Everything heard so far (final + interim). */
+  getText: () => string;
+};
+
+/** Errors after which restarting the recogniser can never succeed. */
+const FATAL_SPEECH_ERRORS = new Set([
+  'not-allowed',
+  'service-not-allowed',
+  'audio-capture',
+  'language-not-supported',
+  'network',
+  'bad-grammar',
+]);
+
 /**
- * Native SpeechRecognition transcription listener (Web Speech API).
- * Provides live verbatim words with fillers and false starts for immediate feedback.
+ * Native SpeechRecognition transcription listener (Web Speech API), used as a LIVE PREVIEW and
+ * best-effort transcript. The recorded audio stays the source of truth.
+ *
+ * Fixes vs the previous version:
+ *  - stop() waits for onend so the trailing final result is kept instead of discarded;
+ *  - text from earlier recogniser sessions (auto-restarts) is accumulated, not overwritten;
+ *  - fatal errors stop the restart loop and are reported; `no-speech` restarts quietly;
+ *  - restarts are capped when the engine keeps ending without producing any result.
  */
 export function startLiveSpeechRecognition(
   onTranscript: (fullText: string, isFinal: boolean) => void,
   onError?: (errorType: string) => void,
-): { stop: () => void } | null {
-  if (typeof window === 'undefined') return null;
-
-  const SpeechRecognitionClass =
-    (window as unknown as { SpeechRecognition?: any }).SpeechRecognition ||
-    (window as unknown as { webkitSpeechRecognition?: any }).webkitSpeechRecognition;
+  onStatus?: (status: 'listening' | 'heard-speech' | 'ended') => void,
+): LiveRecognizer | null {
+  const SpeechRecognitionClass = getSpeechRecognitionClass();
 
   if (!SpeechRecognitionClass) {
     if (onError) onError('unsupported');
     return null;
   }
 
-  let active = true;
-  let recognition: any = null;
+  let recognition: SpeechRecognitionLike | null = null;
+  let stopping = false; // stop() requested; keep consuming results until onend
+  let finished = false; // fully done; ignore everything
+  let committed = ''; // text from earlier recogniser sessions
+  let sessionText = ''; // text of the current recogniser session (final + interim)
+  let sessionHadFinal = false;
+  let restartsWithoutResult = 0;
+  let resolveStopped: (() => void) | null = null;
 
-  try {
-    recognition = new SpeechRecognitionClass();
-    recognition.continuous = true;
-    recognition.interimResults = true;
-    // Prefer user's active English dialect or default to en-US for maximum cloud recognizer compatibility
-    const preferredLang =
-      typeof navigator !== 'undefined' && navigator.language && navigator.language.startsWith('en')
-        ? navigator.language
-        : 'en-US';
-    recognition.lang = preferredLang;
+  const fullText = () => [committed, sessionText].filter(Boolean).join(' ').trim();
 
-    recognition.onresult = (event: any) => {
-      if (!active) return;
+  const preferredLang =
+    typeof navigator !== 'undefined' && navigator.language && navigator.language.startsWith('en')
+      ? navigator.language
+      : 'en-US';
+
+  const finish = () => {
+    if (finished) return;
+    finished = true;
+    committed = fullText();
+    sessionText = '';
+    resolveStopped?.();
+    onStatus?.('ended');
+  };
+
+  const create = (): SpeechRecognitionLike => {
+    const r = new SpeechRecognitionClass();
+    recognition = r;
+    r.continuous = true;
+    r.interimResults = true;
+    r.lang = preferredLang;
+
+    r.onstart = () => onStatus?.('listening');
+    r.onspeechstart = () => onStatus?.('heard-speech');
+
+    r.onresult = (event) => {
+      if (finished) return;
       let finalStr = '';
       let interimStr = '';
       for (let i = 0; i < event.results.length; ++i) {
         const item = event.results[i];
         if (item && item[0]) {
-          if (item.isFinal) {
-            finalStr += (finalStr ? ' ' : '') + item[0].transcript.trim();
-          } else {
-            interimStr += (interimStr ? ' ' : '') + item[0].transcript.trim();
-          }
+          const t = String(item[0].transcript || '').trim();
+          if (!t) continue;
+          if (item.isFinal) finalStr += (finalStr ? ' ' : '') + t;
+          else interimStr += (interimStr ? ' ' : '') + t;
         }
       }
-
-      const combined = (finalStr + (interimStr ? ' ' + interimStr : '')).trim();
-      onTranscript(combined, Boolean(finalStr && !interimStr));
+      sessionText = (finalStr + (interimStr ? ' ' + interimStr : '')).trim();
+      sessionHadFinal = Boolean(finalStr);
+      if (sessionText) restartsWithoutResult = 0;
+      onTranscript(fullText(), Boolean(finalStr && !interimStr));
     };
 
-    recognition.onerror = (event: any) => {
+    r.onerror = (event) => {
       const err = event?.error || 'unknown';
-      if (err !== 'no-speech') {
-        console.warn('[IELTS Studio] SpeechRecognition error:', err);
-        if (onError) onError(err);
+      if (err === 'no-speech' || err === 'aborted') return; // harmless; onend decides what happens next
+      console.warn('[IELTS Studio] SpeechRecognition error:', err);
+      onError?.(err);
+      if (FATAL_SPEECH_ERRORS.has(err)) {
+        stopping = true; // do not restart
       }
     };
 
-    recognition.onend = () => {
-      // Auto-restart if still actively recording
-      if (active) {
-        try {
-          recognition.start();
-        } catch {
-          // ignore restart errors
-        }
+    r.onend = () => {
+      if (finished) return;
+      // Bank this session's text before a possible restart.
+      committed = fullText();
+      sessionText = '';
+      if (stopping) {
+        finish();
+        return;
+      }
+      restartsWithoutResult += sessionHadFinal ? 0 : 1;
+      sessionHadFinal = false;
+      if (restartsWithoutResult > 5) {
+        onError?.('no-results');
+        finish();
+        return;
+      }
+      try {
+        create().start();
+      } catch (err) {
+        console.warn('[IELTS Studio] SpeechRecognition restart failed:', err);
+        onError?.('restart_failed');
+        finish();
       }
     };
+    return r;
+  };
 
-    recognition.start();
+  try {
+    create().start();
   } catch (err) {
     console.warn('[IELTS Studio] SpeechRecognition not active:', err);
     if (onError) onError('init_failed');
@@ -371,16 +453,28 @@ export function startLiveSpeechRecognition(
   }
 
   return {
-    stop: () => {
-      active = false;
-      if (recognition) {
-        try {
-          recognition.stop();
-        } catch {
-          // ignore
+    getText: () => fullText(),
+    stop: () =>
+      new Promise<string>((resolve) => {
+        if (finished) {
+          resolve(fullText());
+          return;
         }
-      }
-    },
+        stopping = true;
+        const timeout = setTimeout(() => {
+          finish();
+          resolve(fullText());
+        }, 1500);
+        resolveStopped = () => {
+          clearTimeout(timeout);
+          resolve(fullText());
+        };
+        try {
+          recognition?.stop();
+        } catch {
+          finish();
+        }
+      }),
   };
 }
 

@@ -459,6 +459,211 @@ ABSOLUTE RULES
 }
 
 /**
+ * Tolerant JSON extractor & parser for LLM responses:
+ * - Strips ```json ... ``` or ``` ... ``` fences
+ * - Extracts balanced JSON object or array
+ * - Returns typed object or throws descriptive error
+ */
+export function parseTolerantJson<T = unknown>(raw: string): T {
+  let text = raw.trim();
+  const fenceMatch = text.match(/```(?:json)?\s*([\s\S]*?)\s*```/i);
+  if (fenceMatch && fenceMatch[1]) {
+    text = fenceMatch[1].trim();
+  }
+  try {
+    return JSON.parse(text) as T;
+  } catch {
+    const firstBrace = text.indexOf('{');
+    const firstBracket = text.indexOf('[');
+    let startIdx = -1;
+    let openChar = '{';
+    let closeChar = '}';
+
+    if (firstBrace !== -1 && (firstBracket === -1 || firstBrace < firstBracket)) {
+      startIdx = firstBrace;
+      openChar = '{';
+      closeChar = '}';
+    } else if (firstBracket !== -1) {
+      startIdx = firstBracket;
+      openChar = '[';
+      closeChar = ']';
+    }
+
+    if (startIdx !== -1) {
+      let depth = 0;
+      let inString = false;
+      let escape = false;
+      let endIdx = -1;
+
+      for (let i = startIdx; i < text.length; i++) {
+        const c = text[i];
+        if (escape) {
+          escape = false;
+          continue;
+        }
+        if (c === '\\') {
+          escape = true;
+          continue;
+        }
+        if (c === '"') {
+          inString = !inString;
+          continue;
+        }
+        if (!inString) {
+          if (c === openChar) depth++;
+          else if (c === closeChar) {
+            depth--;
+            if (depth === 0) {
+              endIdx = i;
+              break;
+            }
+          }
+        }
+      }
+
+      if (endIdx !== -1) {
+        const candidate = text.slice(startIdx, endIdx + 1);
+        try {
+          return JSON.parse(candidate) as T;
+        } catch {
+          // fall through
+        }
+      }
+    }
+    throw new Error(`Failed to parse AI response as valid JSON: ${raw.slice(0, 160)}...`);
+  }
+}
+
+export type ScoringOptions = {
+  signal?: AbortSignal;
+  timeoutMs?: number;
+  systemInstruction?: string;
+  temperature?: number;
+  maxTokens?: number;
+};
+
+/**
+ * Dedicated AI scoring call for Writing and Speaking.
+ * - Uses scoring-specific system prompt (no item-generation constraints).
+ * - Deterministic: temperature 0 by default.
+ * - Tolerates non-standard markdown fences and retryable formats.
+ */
+export async function callProviderScoring(
+  prompt: string,
+  rawConfig: ProviderConfig,
+  options?: ScoringOptions,
+): Promise<GenerationResult> {
+  const config = resolveProviderRouting(rawConfig);
+  if (config.model === 'gpt-6-luna' && !config.apiKey.trim()) {
+    throw new Error(
+      'EXPLABS_API_KEY is not set. Please create one under Settings -> API Keys and export EXPLABS_API_KEY.',
+    );
+  }
+
+  const completionsUrl = buildChatCompletionsUrl(config.baseUrl);
+  const timeoutMs = options?.timeoutMs ?? 60000;
+
+  const headers: Record<string, string> = {
+    'Content-Type': 'application/json',
+    Accept: 'application/json',
+  };
+  if (config.apiKey.trim()) {
+    headers.Authorization = `Bearer ${config.apiKey.trim()}`;
+  }
+
+  const model = config.model.trim() || 'gpt-4o';
+  const systemInstruction =
+    options?.systemInstruction ||
+    `You are an official Cambridge IELTS Academic Examiner. You only SCORE candidate responses against official IELTS Band Descriptors (0.0 to 9.0 on 0.5 increments).
+You judge criteria independently based on verified verbatim quotes. You never generate test items or practice passages.
+Return JSON only matching the requested schema with no markdown wrapping or conversational commentary.`;
+
+  const buildBody = (includeResponseFormat: boolean) =>
+    JSON.stringify({
+      model,
+      messages: [
+        { role: 'system', content: systemInstruction },
+        { role: 'user', content: prompt },
+      ],
+      temperature: options?.temperature ?? 0,
+      max_tokens: options?.maxTokens ?? 3000,
+      ...(includeResponseFormat ? { response_format: { type: 'json_object' } } : {}),
+    });
+
+  const abortSignal = options?.signal ? options.signal : AbortSignal.timeout(timeoutMs);
+
+  let response: Response;
+  try {
+    response = await fetch(completionsUrl, {
+      method: 'POST',
+      headers,
+      body: buildBody(true),
+      signal: abortSignal,
+    });
+
+    if (response.status === 400) {
+      const errText = await response.clone().text().catch(() => '');
+      if (errText.toLowerCase().includes('response_format')) {
+        response = await fetch(completionsUrl, {
+          method: 'POST',
+          headers,
+          body: buildBody(false),
+          signal: abortSignal,
+        });
+      }
+    }
+  } catch (err) {
+    if ((err as Error).name === 'AbortError' || (err as Error).name === 'TimeoutError') {
+      throw new Error(`Scoring timed out after ${Math.round(timeoutMs / 1000)} seconds.`, { cause: err });
+    }
+    throw new Error(`Failed to reach scoring endpoint: ${(err as Error).message || 'Network error'}.`, {
+      cause: err,
+    });
+  }
+
+  if (!response.ok) {
+    let errMsg = `Scoring request failed (${response.status} ${response.statusText})`;
+    try {
+      const errData = await response.json();
+      if (errData?.error?.message) {
+        errMsg = `Scoring error (${response.status}): ${errData.error.message}`;
+      } else if (errData?.message) {
+        errMsg = `Scoring error (${response.status}): ${errData.message}`;
+      }
+    } catch {
+      // not JSON
+    }
+    throw new Error(errMsg);
+  }
+
+  const json = (await response.json()) as {
+    model?: string;
+    choices?: Array<{
+      finish_reason?: string;
+      message?: { content?: string };
+    }>;
+    usage?: TokenUsage;
+  };
+
+  const choice = json.choices?.[0];
+  if (!choice) {
+    throw new Error('Scoring provider returned an empty response.');
+  }
+
+  const content = choice.message?.content;
+  if (!content || typeof content !== 'string' || !content.trim()) {
+    throw new Error('Scoring provider returned empty content.');
+  }
+
+  return {
+    content,
+    model: json.model || model,
+    provider: new URL(config.baseUrl).hostname,
+    usage: json.usage,
+  };
+}
+
+/**
  * Makes a test call to the Experiential gateway with model gpt-6-luna
  * to verify API connectivity and print token usage.
  */

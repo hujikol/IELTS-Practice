@@ -1,7 +1,7 @@
 // Browser-native persistent storage for IELTS attempts, requests, imports, and history.
 // Replaces Tauri native commands with pure browser localStorage / memory store.
 
-import { score, type Envelope, type TestData, type AttemptRecord } from './types.ts';
+import { score, type Envelope, type TestData, type AttemptRecord, type Recording } from './types.ts';
 import { buildAttemptCapture, generateFinalReport } from './assessment-coordinator.ts';
 import { roundIeltsOverallBand, ieltsBandToCefr, type CefrLevel } from './bands.ts';
 
@@ -135,6 +135,10 @@ export function sanitizeAttemptRecord(record: AttemptRecord): AttemptRecord {
   // Sanitize finalReport if present
   if (record.data.finalReport) {
     const report = record.data.finalReport;
+    if (!report.rubric_version) {
+      report.rubric_version = 'legacy';
+      changed = true;
+    }
     if (report.modules) {
       if (!writingAttempted && (report.modules.writing?.band !== null || report.modules.writing?.status !== 'unattempted')) {
         report.modules.writing = {
@@ -465,6 +469,7 @@ export const savePatch = async (args: {
     responses?: Record<string, string | number>;
     texts?: string[];
     speakingTexts?: string[];
+    recordings?: Record<string, Recording>;
     notes?: string[];
     marked?: string[];
     audioPlayed?: boolean[];
@@ -491,6 +496,9 @@ export const savePatch = async (args: {
   }
   if (args.patch.speakingTexts) {
     data.speakingTexts = [...args.patch.speakingTexts];
+  }
+  if (args.patch.recordings) {
+    data.recordings = { ...(data.recordings ?? {}), ...args.patch.recordings };
   }
   if (args.patch.notes) {
     data.notes = [...args.patch.notes];

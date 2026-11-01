@@ -7,9 +7,95 @@ import type { FinalReport, WeaknessItem } from '../lib/scoring.ts';
 import { countWords, type AttemptRecord, type TestData, type Question } from '../lib/types.ts';
 import { generateFinalReport } from '../lib/assessment-coordinator.ts';
 import { isWritingAttempted, isSpeakingAttempted, writeRecord } from '../lib/attempts.ts';
+import { getSpeakingAudioBlob } from '../lib/speaking-recorder.ts';
 import { ieltsBandToCefr } from '../lib/bands.ts';
 import { Button } from './ui/button.tsx';
 import { VisualRenderer } from './visual-renderer.tsx';
+
+function SpeakingAudioClipPlayer({
+  storageKey,
+  label,
+  durationS,
+}: {
+  storageKey: string;
+  label: string;
+  durationS?: number;
+}) {
+  const [blobUrl, setBlobUrl] = useState<string | null>(null);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    let url: string | null = null;
+
+    if (storageKey) {
+      setLoading(true);
+      getSpeakingAudioBlob(storageKey)
+        .then((blob) => {
+          if (!active) return;
+          if (blob && blob.size > 0) {
+            url = URL.createObjectURL(blob);
+            setBlobUrl(url);
+          } else {
+            setError('Audio recording not found in storage.');
+          }
+        })
+        .catch((e) => {
+          if (active) setError((e as Error).message || 'Failed to load audio');
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    }
+
+    return () => {
+      active = false;
+      if (url) URL.revokeObjectURL(url);
+    };
+  }, [storageKey]);
+
+  return (
+    <div
+      style={{
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexWrap: 'wrap',
+        gap: 12,
+        backgroundColor: '#f8fafc',
+        border: '1px solid #e2e8f0',
+        borderRadius: 10,
+        padding: '10px 14px',
+        marginBottom: 8,
+      }}
+    >
+      <div style={{ display: 'flex', alignItems: 'center', gap: 8 }}>
+        <span style={{ fontSize: '18px' }} aria-hidden="true">🎙️</span>
+        <div>
+          <strong style={{ fontSize: '12.5px', color: '#1e293b', display: 'block' }}>{label}</strong>
+          {durationS !== undefined && durationS > 0 && (
+            <span style={{ fontSize: '11px', color: '#64748b' }}>
+              Duration: {Math.floor(durationS / 60)}:{String(Math.floor(durationS % 60)).padStart(2, '0')}
+            </span>
+          )}
+        </div>
+      </div>
+
+      <div>
+        {loading && <span style={{ fontSize: '12px', color: '#64748b' }}>Loading audio…</span>}
+        {error && <span style={{ fontSize: '12px', color: '#ef4444' }}>{error}</span>}
+        {blobUrl && (
+          <audio
+            controls
+            src={blobUrl}
+            style={{ height: '36px', maxWidth: '300px', outline: 'none' }}
+          />
+        )}
+      </div>
+    </div>
+  );
+}
 
 interface ReviewProps {
   data: TestData;
@@ -180,14 +266,38 @@ export function Review({
     if (readingItems.length > 0) {
       tabs.push({ id: 'reading', label: `📖 Reading (${readingItems.length})` });
     }
-    if (writingAttempted || writingTasks.length > 0) {
-      tabs.push({ id: 'writing', label: `✍️ Writing (${writingTasks.length} Tasks)` });
+    const hasWriting = Boolean(
+      writingAttempted ||
+      writingTasks.length > 0 ||
+      (testRecord.writing && testRecord.writing.length > 0) ||
+      testRecord.scope === 'writing' ||
+      testRecord.scope === 'full'
+    );
+    if (hasWriting) {
+      tabs.push({ id: 'writing', label: `✍️ Writing (${writingTasks.length || (testRecord.writing?.length || 2)} Tasks)` });
     }
-    if (speakingAttempted || speakingParts.length > 0) {
-      tabs.push({ id: 'speaking', label: `🗣️ Speaking (${speakingParts.length} Parts)` });
+    const hasSpeaking = Boolean(
+      speakingAttempted ||
+      speakingParts.length > 0 ||
+      (testRecord.speaking && testRecord.speaking.length > 0) ||
+      testRecord.scope === 'speaking' ||
+      testRecord.scope === 'full'
+    );
+    if (hasSpeaking) {
+      tabs.push({ id: 'speaking', label: `🗣️ Speaking (${speakingParts.length || (testRecord.speaking?.length || 3)} Parts)` });
     }
     return tabs;
-  }, [listeningItems.length, readingItems.length, writingAttempted, writingTasks.length, speakingAttempted, speakingParts.length]);
+  }, [
+    listeningItems.length,
+    readingItems.length,
+    writingAttempted,
+    writingTasks.length,
+    speakingAttempted,
+    speakingParts.length,
+    testRecord.writing,
+    testRecord.speaking,
+    testRecord.scope,
+  ]);
 
   return (
     <main style={{ fontFamily: "system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif", padding: '24px 20px 48px', maxWidth: '1040px', margin: '0 auto', color: '#0f172a' }}>
@@ -376,6 +486,50 @@ export function Review({
           </div>
         </div>
       </section>
+
+      {/* Legacy Rubric Warning Banner */}
+      {report?.rubric_version === 'legacy' && (
+        <div
+          role="alert"
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'space-between',
+            flexWrap: 'wrap',
+            gap: 12,
+            backgroundColor: '#fffbeb',
+            border: '1px solid #fde68a',
+            borderRadius: 12,
+            padding: '14px 18px',
+            marginBottom: 20,
+            color: '#92400e',
+          }}
+        >
+          <div>
+            <strong style={{ fontSize: '0.92rem' }}>⚠️ Legacy Scoring Method</strong>
+            <p style={{ margin: '3px 0 0', fontSize: '0.84rem' }}>
+              This attempt was evaluated with the legacy scoring engine. Re-score with AI to apply the calibrated rubric with verified quotes and honest speech metrics.
+            </p>
+          </div>
+          <button
+            type="button"
+            onClick={() => void handleRunAiEvaluation()}
+            disabled={evaluatingAi}
+            style={{
+              padding: '6px 14px',
+              borderRadius: '8px',
+              backgroundColor: '#b45309',
+              color: '#ffffff',
+              border: 'none',
+              fontWeight: 700,
+              fontSize: '0.85rem',
+              cursor: evaluatingAi ? 'not-allowed' : 'pointer',
+            }}
+          >
+            {evaluatingAi ? 'Re-scoring…' : 'Re-score with AI'}
+          </button>
+        </div>
+      )}
 
       {/* Optional AI Diagnostic Action Card */}
       {((writingAttempted && modules?.writing?.confidence === 'low') ||
@@ -989,15 +1143,59 @@ export function Review({
                           fontWeight: 800,
                           padding: '4px 12px',
                           borderRadius: '8px',
-                          backgroundColor: '#f5f3ff',
-                          color: '#6d28d9',
-                          border: '1px solid #ddd6fe',
+                          backgroundColor: task.band !== null ? '#f5f3ff' : '#fffbeb',
+                          color: task.band !== null ? '#6d28d9' : '#b45309',
+                          border: `1px solid ${task.band !== null ? '#ddd6fe' : '#fde68a'}`,
                         }}
                       >
-                        Band {task.band.toFixed(1)}
+                        {task.band !== null ? `Band ${task.band.toFixed(1)}` : 'Unscored'}
                       </span>
+                      {task.band === null && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRunAiEvaluation()}
+                          disabled={evaluatingAi}
+                          style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            backgroundColor: '#6d28d9',
+                            color: '#ffffff',
+                            border: 'none',
+                            cursor: evaluatingAi ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {evaluatingAi ? 'Scoring…' : '🔄 Retry Scoring'}
+                        </button>
+                      )}
                     </div>
                   </div>
+
+                  {/* Unscored Explanation */}
+                  {task.band === null && task.unscored_reason && (
+                    <div
+                      style={{
+                        padding: '12px 16px',
+                        borderRadius: 10,
+                        backgroundColor: '#fffbeb',
+                        border: '1px solid #fde68a',
+                        color: '#92400e',
+                        marginBottom: 18,
+                        fontSize: '0.88rem',
+                        lineHeight: 1.5,
+                      }}
+                    >
+                      <strong>⚠️ Task Unscored:</strong>{' '}
+                      {task.unscored_reason === 'ai_disabled'
+                        ? 'AI provider is not configured or disabled in Settings. Enable AI to score writing tasks.'
+                        : task.unscored_reason === 'too_short'
+                          ? 'This submission was under the minimum scorable word count (25 words).'
+                          : task.unscored_reason === 'not_attempted'
+                            ? 'No text was submitted for this task.'
+                            : 'AI scoring encountered an error or timeout. You can retry evaluation using the button above.'}
+                    </div>
+                  )}
 
                   {/* Task Prompt Reference Callout */}
                   {taskMeta?.prompt && (
@@ -1186,131 +1384,412 @@ export function Review({
       {/* ─── TAB 5: SPEAKING REVIEW ─── */}
       {activeTab === 'speaking' && report && (
         <div style={{ display: 'flex', flexDirection: 'column', gap: '20px' }}>
-          {speakingParts.length === 0 ? (
-            <div style={{ padding: '48px 24px', textAlign: 'center', backgroundColor: '#ffffff', borderRadius: 16, border: '1px solid #e2e8f0', color: '#64748b' }}>
-              <div style={{ fontSize: '36px', marginBottom: '12px' }}>🗣️</div>
-              <h3 style={{ margin: '0 0 6px', color: '#0f172a', fontSize: '18px', fontWeight: 800 }}>Speaking Section Not Attempted</h3>
-              <p style={{ margin: 0, fontSize: '0.92rem', color: '#64748b' }}>
-                You did not record or submit answers for the Speaking parts in this test session.
-              </p>
-            </div>
-          ) : (
-            speakingParts.map((part) => (
-              <article
-                key={part.part}
-                style={{
-                  backgroundColor: '#ffffff',
-                  border: '1px solid #e2e8f0',
-                  borderRadius: '14px',
-                  padding: '22px 24px',
-                  boxShadow: '0 1px 2px rgba(15, 23, 42, 0.03)',
-                }}
-              >
-                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '12px' }}>
-                  <h3 style={{ margin: 0, fontSize: '17px', fontWeight: 800, color: '#0f172a' }}>
-                    Speaking Part {part.part} Analysis
-                  </h3>
-                  {modules?.speaking?.band != null && (
-                    <span style={{ fontSize: '13px', fontWeight: 800, color: '#b45309', backgroundColor: '#fef3c7', padding: '3px 10px', borderRadius: '6px', border: '1px solid #fde68a' }}>
-                      Overall Speaking Band: {modules.speaking.band.toFixed(1)}
-                    </span>
+          {(() => {
+            const rawSpeaking = testRecord.speaking || [];
+            const displaySpeakingParts: FinalReport['review']['speaking']['parts'] =
+              speakingParts.length > 0
+                ? speakingParts
+                : (rawSpeaking.length > 0
+                    ? rawSpeaking.map((_, idx) => {
+                        const partNum = (idx + 1) as 1 | 2 | 3;
+                        const txt = testRecord.speakingTexts?.[idx] || '';
+                        const hasRecs = Object.keys(testRecord.recordings || {}).some((k) => k.startsWith(`p${partNum}_`));
+                        return {
+                          part: partNum,
+                          transcript: txt,
+                          status: 'unscored' as const,
+                          unscored_reason: txt.trim().length > 0 ? 'ai_disabled' : hasRecs ? 'no_transcript' : 'not_attempted',
+                          highlights: [],
+                          vocab_upgrades: [],
+                          strengths: [],
+                          priority_fixes: [],
+                          metrics: undefined,
+                          improved_answer: undefined,
+                          cue_card_outline: undefined,
+                        };
+                      })
+                    : [
+                        { part: 1 as const, transcript: testRecord.speakingTexts?.[0] || '', status: 'unscored' as const, unscored_reason: 'not_attempted', highlights: [], vocab_upgrades: [], strengths: [], priority_fixes: [], metrics: undefined, improved_answer: undefined, cue_card_outline: undefined },
+                        { part: 2 as const, transcript: testRecord.speakingTexts?.[1] || '', status: 'unscored' as const, unscored_reason: 'not_attempted', highlights: [], vocab_upgrades: [], strengths: [], priority_fixes: [], metrics: undefined, improved_answer: undefined, cue_card_outline: undefined },
+                        { part: 3 as const, transcript: testRecord.speakingTexts?.[2] || '', status: 'unscored' as const, unscored_reason: 'not_attempted', highlights: [], vocab_upgrades: [], strengths: [], priority_fixes: [], metrics: undefined, improved_answer: undefined, cue_card_outline: undefined },
+                      ]);
+
+            return displaySpeakingParts.map((part) => {
+              const partIdx = part.part - 1;
+              const partMeta = rawSpeaking[partIdx];
+              const partRecordings = Object.entries(testRecord.recordings || {})
+                .filter(([k]) => k.startsWith(`p${part.part}_`))
+                .sort(([a], [b]) => a.localeCompare(b));
+
+              const partTitle =
+                part.part === 1
+                  ? 'Speaking Part 1: Interview & Introduction'
+                  : part.part === 2
+                    ? 'Speaking Part 2: Individual Long Turn (Cue Card)'
+                    : 'Speaking Part 3: Two-Way Analytical Discussion';
+
+              return (
+                <article
+                  key={part.part}
+                  style={{
+                    backgroundColor: '#ffffff',
+                    border: '1px solid #e2e8f0',
+                    borderRadius: '14px',
+                    padding: '24px 26px',
+                    boxShadow: '0 1px 3px rgba(15, 23, 42, 0.04)',
+                  }}
+                >
+                  <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '16px', flexWrap: 'wrap', gap: 10 }}>
+                    <div>
+                      <div style={{ fontSize: '11px', fontWeight: 800, textTransform: 'uppercase', color: '#b45309', letterSpacing: '0.05em', marginBottom: 2 }}>
+                        IELTS Academic Speaking · Part {part.part}
+                      </div>
+                      <h3 style={{ margin: 0, fontSize: '18px', fontWeight: 800, color: '#0f172a' }}>
+                        {partTitle}
+                      </h3>
+                    </div>
+
+                    <div style={{ display: 'flex', alignItems: 'center', gap: 10 }}>
+                      <span
+                        style={{
+                          fontSize: '0.88rem',
+                          fontWeight: 800,
+                          padding: '4px 12px',
+                          borderRadius: '8px',
+                          backgroundColor: modules?.speaking?.band != null ? '#fef3c7' : '#fffbeb',
+                          color: modules?.speaking?.band != null ? '#b45309' : '#92400e',
+                          border: `1px solid ${modules?.speaking?.band != null ? '#fde68a' : '#fde68a'}`,
+                        }}
+                      >
+                        {modules?.speaking?.band != null ? `Overall Band ${modules.speaking.band.toFixed(1)}` : 'Unscored'}
+                      </span>
+                    </div>
+                  </div>
+
+                  {/* Unscored Speaking Banner */}
+                  {part.status === 'unscored' && (
+                    <div
+                      style={{
+                        padding: '12px 16px',
+                        borderRadius: 10,
+                        backgroundColor: '#fffbeb',
+                        border: '1px solid #fde68a',
+                        color: '#92400e',
+                        marginBottom: 16,
+                        fontSize: '0.88rem',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        flexWrap: 'wrap',
+                        gap: 10,
+                      }}
+                    >
+                      <div>
+                        <strong>⚠️ Speaking Part Unscored:</strong>{' '}
+                        {part.unscored_reason === 'no_transcript'
+                          ? 'Audio recording is stored in local storage, but no speech transcript was generated.'
+                          : part.unscored_reason === 'not_attempted'
+                            ? 'This speaking part was not attempted or had fewer than 5 words.'
+                            : 'Speech recognition or AI scoring was not completed.'}
+                      </div>
+                      {part.unscored_reason === 'no_transcript' && (
+                        <button
+                          type="button"
+                          onClick={() => void handleRunAiEvaluation()}
+                          disabled={evaluatingAi}
+                          style={{
+                            fontSize: '0.8rem',
+                            fontWeight: 700,
+                            padding: '4px 10px',
+                            borderRadius: '6px',
+                            backgroundColor: '#b45309',
+                            color: '#ffffff',
+                            border: 'none',
+                            cursor: evaluatingAi ? 'not-allowed' : 'pointer',
+                          }}
+                        >
+                          {evaluatingAi ? 'Transcribing…' : '🎙️ Transcribe & Score'}
+                        </button>
+                      )}
+                    </div>
                   )}
-                </div>
 
-                {/* 4 Public Criteria Breakdown (Overall Speaking) */}
-                {modules?.speaking?.criteria && part.part === 1 && (
-                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '16px' }}>
-                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Fluency &amp; Coherence</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.FC.toFixed(1)}</div>
+                  {/* Part Prompt & Questions Reference */}
+                  <div
+                    style={{
+                      backgroundColor: '#f8fafc',
+                      border: '1px solid #e2e8f0',
+                      borderRadius: '10px',
+                      padding: '14px 18px',
+                      marginBottom: '18px',
+                    }}
+                  >
+                    <div style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700, color: '#64748b', marginBottom: 6 }}>
+                      {part.part === 2 ? 'Official IELTS Candidate Cue Card' : 'Examiner Interview Prompts'}
                     </div>
-                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Lexical Resource</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.LR.toFixed(1)}</div>
-                    </div>
-                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Grammar Range</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.GRA.toFixed(1)}</div>
-                    </div>
-                    <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
-                      <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Pronunciation</div>
-                      <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.PR.toFixed(1)}</div>
-                    </div>
+
+                    {part.part === 2 ? (
+                      <div>
+                        <strong style={{ fontSize: '14px', color: '#0f172a', display: 'block', marginBottom: 6 }}>
+                          {partMeta?.prompt || 'Describe a memorable journey or experience.'}
+                        </strong>
+                        {partMeta?.cue && partMeta.cue.length > 0 && (
+                          <div style={{ fontSize: '12.5px', color: '#334155', paddingLeft: 14 }}>
+                            <div style={{ fontWeight: 600, marginBottom: 4 }}>You should say:</div>
+                            <ul style={{ margin: 0, paddingLeft: 18 }}>
+                              {partMeta.cue.map((c, cIdx) => (
+                                <li key={cIdx} style={{ marginBottom: 2 }}>{c}</li>
+                              ))}
+                            </ul>
+                          </div>
+                        )}
+                      </div>
+                    ) : (
+                      <div>
+                        {partMeta?.questions && partMeta.questions.length > 0 ? (
+                          <ol style={{ margin: 0, paddingLeft: 18, fontSize: '12.5px', color: '#334155' }}>
+                            {partMeta.questions.map((q, qIdx) => (
+                              <li key={qIdx} style={{ marginBottom: 4 }}>{q}</li>
+                            ))}
+                          </ol>
+                        ) : (
+                          <p style={{ margin: 0, fontSize: '12.5px', color: '#64748b' }}>
+                            {partMeta?.prompt || `Interview questions for Speaking Part ${part.part}.`}
+                          </p>
+                        )}
+                      </div>
+                    )}
                   </div>
-                )}
 
-                {/* Speech Metrics */}
-                {part.metrics && (
-                  <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: '14px', fontSize: '12px', color: '#475569' }}>
-                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
-                      <strong>Pacing:</strong> {part.metrics.words_per_minute} WPM
+                  {/* Candidate Voice Recordings (Playable Audio Players) */}
+                  <div style={{ marginBottom: '18px' }}>
+                    <div style={{ fontSize: '12px', fontWeight: 700, color: '#0f172a', marginBottom: 8, display: 'flex', alignItems: 'center', gap: 6 }}>
+                      <span>🎙️</span>
+                      <span>Your Recorded Voice Clips ({partRecordings.length})</span>
                     </div>
-                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
-                      <strong>Fillers:</strong> {Math.round(part.metrics.filler_rate * 100)}%
-                    </div>
-                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
-                      <strong>Pauses &gt; 1s:</strong> {part.metrics.pause_count_over_1s}
-                    </div>
-                    <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
-                      <strong>Self-Repairs:</strong> {part.metrics.self_repair_count}
-                    </div>
+
+                    {partRecordings.length === 0 ? (
+                      <div
+                        style={{
+                          fontSize: '12.5px',
+                          color: '#64748b',
+                          fontStyle: 'italic',
+                          padding: '12px 16px',
+                          backgroundColor: '#f8fafc',
+                          borderRadius: 8,
+                          border: '1px dashed #cbd5e1',
+                        }}
+                      >
+                        No voice recording was stored for this part.
+                      </div>
+                    ) : (
+                      partRecordings.map(([key, rec]) => {
+                        const clipLabel =
+                          key === 'p2_speech'
+                            ? 'Candidate Long Turn (2-Minute Speech)'
+                            : key.startsWith('p2_roundoff_')
+                              ? `Part 2 Follow-up Question ${Number(key.replace('p2_roundoff_', '')) + 1}`
+                              : key.startsWith('p1_q')
+                                ? `Part 1 Question ${Number(key.replace('p1_q', '')) + 1} Answer`
+                                : key.startsWith('p3_q')
+                                  ? `Part 3 Discussion Question ${Number(key.replace('p3_q', '')) + 1} Answer`
+                                  : `Answer Recording (${key})`;
+
+                        return (
+                          <SpeakingAudioClipPlayer
+                            key={key}
+                            storageKey={rec.key}
+                            label={clipLabel}
+                            durationS={rec.duration}
+                          />
+                        );
+                      })
+                    )}
                   </div>
-                )}
 
-                {/* Transcript */}
-                <div style={{ backgroundColor: '#f8fafc', padding: '12px 16px', borderRadius: '8px', border: '1px solid #e2e8f0', marginBottom: '14px', fontSize: '12.5px', lineHeight: 1.55 }}>
-                  <strong style={{ color: '#0f172a' }}>Candidate Transcript:</strong> {part.transcript}
-                </div>
-
-                {/* Model Spoken Answer */}
-                {part.improved_answer && (
-                  <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '8px', padding: '14px 18px', marginBottom: '14px' }}>
-                    <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
-                      <span style={{ fontSize: '14px' }}>✨</span>
-                      <h4 style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: '#166534' }}>
-                        Band 8.5 Model Spoken Answer (Cambridge Benchmark)
-                      </h4>
+                  {/* Candidate Transcript Box */}
+                  <div
+                    style={{
+                      backgroundColor: '#f8fafc',
+                      padding: '14px 18px',
+                      borderRadius: '10px',
+                      border: '1px solid #e2e8f0',
+                      marginBottom: '18px',
+                    }}
+                  >
+                    <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 6 }}>
+                      <span style={{ fontSize: '11px', textTransform: 'uppercase', letterSpacing: '0.04em', fontWeight: 700, color: '#475569' }}>
+                        Candidate Speech Transcript
+                      </span>
+                      <span style={{ fontSize: '11px', color: '#64748b' }}>
+                        {part.transcript ? `${countWords(part.transcript)} words` : '0 words'}
+                      </span>
                     </div>
-                    <p style={{ margin: 0, fontSize: '12.5px', lineHeight: 1.6, color: '#14532d', fontStyle: 'italic' }}>
-                      &ldquo;{part.improved_answer}&rdquo;
+                    <p style={{ margin: 0, fontSize: '13px', lineHeight: 1.6, color: part.transcript ? '#1e293b' : '#94a3b8', fontStyle: part.transcript ? 'normal' : 'italic' }}>
+                      {part.transcript || 'No speech transcript recorded for this part.'}
                     </p>
                   </div>
-                )}
 
-                {/* Vocabulary Upgrades */}
-                {part.vocab_upgrades.length > 0 && (
-                  <div style={{ marginBottom: '14px' }}>
-                    <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>
-                      Recommended Lexical Resource Upgrades (+1 Band)
-                    </h4>
-                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(200px, 1fr))', gap: '8px' }}>
-                      {part.vocab_upgrades.map((v, vIdx) => (
-                        <div key={vIdx} style={{ backgroundColor: '#eff6ff', padding: '8px 12px', borderRadius: '6px', fontSize: '12px', border: '1px solid #bfdbfe' }}>
-                          <span style={{ color: '#475569' }}>{v.original}</span>
-                          <span style={{ margin: '0 6px', color: '#94a3b8' }}>→</span>
-                          <span style={{ color: '#1d4ed8', fontWeight: 700 }}>{v.upgraded}</span>
-                        </div>
-                      ))}
+                  {/* 4 Public Criteria Breakdown (Overall Speaking) */}
+                  {modules?.speaking?.criteria && part.part === 1 && (
+                    <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(160px, 1fr))', gap: '10px', marginBottom: '18px' }}>
+                      <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Fluency &amp; Coherence</div>
+                        <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.FC.toFixed(1)}</div>
+                      </div>
+                      <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Lexical Resource</div>
+                        <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.LR.toFixed(1)}</div>
+                      </div>
+                      <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Grammar Range</div>
+                        <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.GRA.toFixed(1)}</div>
+                      </div>
+                      <div style={{ backgroundColor: '#f8fafc', padding: '10px 12px', borderRadius: '8px', border: '1px solid #e2e8f0' }}>
+                        <div style={{ fontSize: '10.5px', textTransform: 'uppercase', color: '#64748b', fontWeight: 700 }}>Pronunciation</div>
+                        <div style={{ fontSize: '16px', fontWeight: 800, color: '#0f172a', margin: '2px 0' }}>Band {modules.speaking.criteria.PR.toFixed(1)}</div>
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Speech Pacing & Pause Metrics */}
+                  {part.metrics ? (
+                    <div style={{ display: 'flex', flexWrap: 'wrap', gap: 12, marginBottom: '18px', fontSize: '12px', color: '#475569' }}>
+                      <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                        <strong>Pacing:</strong> {part.metrics.words_per_minute} WPM
+                      </div>
+                      <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                        <strong>Fillers:</strong> {Math.round(part.metrics.filler_rate * 100)}%
+                      </div>
+                      <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                        <strong>Pauses &gt; 1s:</strong> {part.metrics.pause_count_over_1s}
+                      </div>
+                      <div style={{ backgroundColor: '#f1f5f9', padding: '6px 10px', borderRadius: '6px' }}>
+                        <strong>Self-Repairs:</strong> {part.metrics.self_repair_count}
+                      </div>
+                    </div>
+                  ) : (
+                    <div style={{ marginBottom: '18px', fontSize: '12px', color: '#64748b', fontStyle: 'italic' }}>
+                      Speech timing and pacing metrics not measured (requires word-timestamped audio transcription).
+                    </div>
+                  )}
+
+                  {/* Suggestions Section (Like in Writing): Strengths & Priority Fixes */}
+                  <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(280px, 1fr))', gap: '14px', marginBottom: '18px' }}>
+                    {/* Strengths */}
+                    <div
+                      style={{
+                        backgroundColor: '#f0fdf4',
+                        border: '1px solid #bbf7d0',
+                        borderRadius: '10px',
+                        padding: '14px 16px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                        <span style={{ fontSize: '15px' }}>✓</span>
+                        <h4 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#166534' }}>
+                          Candidate Spoken Strengths
+                        </h4>
+                      </div>
+                      {part.strengths && part.strengths.length > 0 ? (
+                        <ul style={{ margin: 0, paddingLeft: 18, fontSize: '12px', color: '#14532d', lineHeight: 1.5 }}>
+                          {part.strengths.map((s, sIdx) => (
+                            <li key={sIdx} style={{ marginBottom: 4 }}>{s}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p style={{ margin: 0, fontSize: '12px', color: '#166534', fontStyle: 'italic' }}>
+                          Answer addresses the prompt and maintains communication.
+                        </p>
+                      )}
+                    </div>
+
+                    {/* Priority Fixes */}
+                    <div
+                      style={{
+                        backgroundColor: '#fffbeb',
+                        border: '1px solid #fde68a',
+                        borderRadius: '10px',
+                        padding: '14px 16px',
+                      }}
+                    >
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 8 }}>
+                        <span style={{ fontSize: '15px' }}>🎯</span>
+                        <h4 style={{ margin: 0, fontSize: '13px', fontWeight: 700, color: '#92400e' }}>
+                          Priority Fixes for a Higher Band
+                        </h4>
+                      </div>
+                      {part.priority_fixes && part.priority_fixes.length > 0 ? (
+                        <ul style={{ margin: 0, paddingLeft: 18, fontSize: '12px', color: '#78350f', lineHeight: 1.5 }}>
+                          {part.priority_fixes.map((f, fIdx) => (
+                            <li key={fIdx} style={{ marginBottom: 4 }}>{f}</li>
+                          ))}
+                        </ul>
+                      ) : (
+                        <p style={{ margin: 0, fontSize: '12px', color: '#92400e', fontStyle: 'italic' }}>
+                          Expand answers with specific reasons, concrete personal examples, and complex discourse markers.
+                        </p>
+                      )}
                     </div>
                   </div>
-                )}
 
-                {/* Part 2 Cue Card Outline */}
-                {part.cue_card_outline && (
-                  <div style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: '8px', padding: '12px 16px' }}>
-                    <h4 style={{ margin: '0 0 6px 0', fontSize: '13px', fontWeight: 700, color: '#92400e' }}>
-                      Band 8 Speaking Monologue Structure Outline
-                    </h4>
-                    <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#78350f' }}>
-                      {part.cue_card_outline.map((item, iIdx) => (
-                        <li key={iIdx} style={{ marginBottom: '3px' }}>{item}</li>
-                      ))}
-                    </ul>
-                  </div>
-                )}
-              </article>
-            ))
-          )}
+                  {/* Model Spoken Answer */}
+                  {part.improved_answer && (
+                    <div style={{ backgroundColor: '#f0fdf4', border: '1px solid #bbf7d0', borderRadius: '10px', padding: '14px 18px', marginBottom: '18px' }}>
+                      <div style={{ display: 'flex', alignItems: 'center', gap: 6, marginBottom: 6 }}>
+                        <span style={{ fontSize: '14px' }}>✨</span>
+                        <h4 style={{ margin: 0, fontSize: '13px', fontWeight: 800, color: '#166534' }}>
+                          Band 8.5 Model Spoken Answer (Cambridge Benchmark)
+                        </h4>
+                      </div>
+                      <p style={{ margin: 0, fontSize: '12.5px', lineHeight: 1.6, color: '#14532d', fontStyle: 'italic' }}>
+                        &ldquo;{part.improved_answer}&rdquo;
+                      </p>
+                    </div>
+                  )}
+
+                  {/* Vocabulary Upgrades */}
+                  {part.vocab_upgrades && part.vocab_upgrades.length > 0 && (
+                    <div style={{ marginBottom: '18px' }}>
+                      <h4 style={{ fontSize: '13px', fontWeight: 700, color: '#0f172a', marginBottom: '8px' }}>
+                        Recommended Lexical Resource Upgrades (+1 Band)
+                      </h4>
+                      <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fit, minmax(220px, 1fr))', gap: '8px' }}>
+                        {part.vocab_upgrades.map((v, vIdx) => (
+                          <div key={vIdx} style={{ backgroundColor: '#eff6ff', padding: '10px 14px', borderRadius: '8px', fontSize: '12px', border: '1px solid #bfdbfe' }}>
+                            <div>
+                              <span style={{ color: '#475569', textDecoration: 'line-through' }}>{v.original}</span>
+                              <span style={{ margin: '0 6px', color: '#94a3b8' }}>→</span>
+                              <span style={{ color: '#1d4ed8', fontWeight: 700 }}>{v.upgraded}</span>
+                            </div>
+                            {v.context && (
+                              <div style={{ fontSize: '11px', color: '#64748b', marginTop: 4, fontStyle: 'italic' }}>
+                                &ldquo;{v.context}&rdquo;
+                              </div>
+                            )}
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  )}
+
+                  {/* Part 2 Cue Card Monologue Structure Outline */}
+                  {part.cue_card_outline && part.cue_card_outline.length > 0 && (
+                    <div style={{ backgroundColor: '#fffbeb', border: '1px solid #fde68a', borderRadius: '10px', padding: '14px 18px' }}>
+                      <h4 style={{ margin: '0 0 8px 0', fontSize: '13px', fontWeight: 700, color: '#92400e' }}>
+                        Band 8 Speaking Monologue Structure Roadmap (2-Minute Pacing)
+                      </h4>
+                      <ul style={{ margin: 0, paddingLeft: '18px', fontSize: '12px', color: '#78350f', lineHeight: 1.5 }}>
+                        {part.cue_card_outline.map((item, iIdx) => (
+                          <li key={iIdx} style={{ marginBottom: '4px' }}>{item}</li>
+                        ))}
+                      </ul>
+                    </div>
+                  )}
+                </article>
+              );
+            });
+          })()}
         </div>
       )}
     </main>

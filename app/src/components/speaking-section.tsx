@@ -40,6 +40,26 @@ type Step =
   | 'part3'
   | 'finished';
 
+const partNumberForKey = (key: string): number => (key.startsWith('p3_') ? 3 : key.startsWith('p2_') ? 2 : 1);
+
+const describeSpeechError = (code: string): string => {
+  switch (code) {
+    case 'unsupported':
+      return 'this browser has no speech recognition; use Chrome or Edge';
+    case 'network':
+      return 'speech recognition needs an internet connection to reach the browser\'s speech service';
+    case 'not-allowed':
+    case 'service-not-allowed':
+      return 'the browser blocked speech recognition (check microphone / dictation permissions)';
+    case 'audio-capture':
+      return 'the browser could not capture the microphone for speech recognition';
+    case 'no-results':
+      return 'the recogniser kept restarting without hearing any words';
+    default:
+      return `error code: ${code}`;
+  }
+};
+
 export function SpeakingSection({
   attemptId,
   speakingParts,
@@ -79,12 +99,17 @@ export function SpeakingSection({
   const [repeatsUsed, setRepeatsUsed] = useState<Record<string, number>>({});
 
   // Answers, Transcripts, and Notes
-  const [transcriptsByQuestion, setTranscriptsByQuestion] = useState<Record<string, string>>({});
+  const [, setTranscriptsByQuestion] = useState<Record<string, string>>({});
   const [liveTranscript, setLiveTranscript] = useState('');
   const [speechRecognitionError, setSpeechRecognitionError] = useState<string | null>(null);
   const [currentQuestionKey, setCurrentQuestionKey] = useState<string>('');
   const [savedCurrentAudioDuration, setSavedCurrentAudioDuration] = useState<number | null>(null);
   const recognitionRef = useRef<ReturnType<typeof startLiveSpeechRecognition> | null>(null);
+  // Refs hold the source of truth for transcripts so no async stop path reads stale React state.
+  const transcriptsRef = useRef<Record<string, string>>({});
+  const liveTextRef = useRef<{ key: string; text: string }>({ key: '', text: '' });
+  const [speechStatus, setSpeechStatus] = useState<'starting' | 'listening' | 'heard-speech' | 'ended'>('starting');
+  const [audioSaveError, setAudioSaveError] = useState<string | null>(null);
 
   // Part 2 Prep & Notes
   const [prepNotes, setPrepNotes] = useState(initialNotes[0] || '');
@@ -95,6 +120,15 @@ export function SpeakingSection({
   // Summary of recorded answers
   const recordingsMapRef = useRef<Record<string, Recording>>({});
   const allTranscriptsListRef = useRef<string[]>([]);
+  const advanceStepRef = useRef<() => void>(() => {});
+
+  // Update advanceStepRef whenever step/indexes change so VAD silence detection can auto-advance
+  useEffect(() => {
+    if (step === 'part1') advanceStepRef.current = () => void advancePart1();
+    else if (step === 'part2-speak') advanceStepRef.current = () => void finishPart2Speaking();
+    else if (step === 'part2-roundoff') advanceStepRef.current = () => void advancePart2Roundoff();
+    else if (step === 'part3') advanceStepRef.current = () => void advancePart3();
+  });
 
   // Parse Speaking parts
   const part1Data = speakingParts.find((p) => p.part === 1) || {
@@ -227,7 +261,10 @@ export function SpeakingSection({
     async (text: string, questionKey: string, onSpeechDone?: () => void) => {
       stopExaminerAudio();
       if (recorderRef.current) recorderRef.current.cancel();
-      if (recognitionRef.current) recognitionRef.current.stop();
+      if (recognitionRef.current) {
+        void recognitionRef.current.stop();
+        recognitionRef.current = null;
+      }
 
       setIsExaminerSpeaking(true);
       setIsRecording(false);
@@ -255,6 +292,25 @@ export function SpeakingSection({
     [stopExaminerAudio, examiner.voiceId],
   );
 
+  // Persist one answer's audio; failures are surfaced instead of swallowed.
+  const persistAnswerAudio = async (questionKey: string, blob: Blob, durationS: number) => {
+    try {
+      const storageKey = await saveSpeakingAudioBlob(attemptId, partNumberForKey(questionKey), questionKey, 1, blob);
+      // The recording key MUST be the real storage key so getSpeakingAudioBlob() can find it later.
+      recordingsMapRef.current[questionKey] = { key: storageKey, duration: durationS, createdAt: Date.now() };
+      setAudioSaveError(null);
+    } catch (err) {
+      setAudioSaveError(`Audio for this answer could not be saved (${(err as Error).message || 'storage error'}).`);
+    }
+  };
+
+  // Record the final text for a question in the ref (source of truth) and mirror it into state for rendering.
+  const commitTranscript = (questionKey: string, text: string) => {
+    const clean = text.trim();
+    if (clean) transcriptsRef.current[questionKey] = clean;
+    setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: transcriptsRef.current[questionKey] ?? '' }));
+  };
+
   // Start recording the candidate's answer
   const startLearnerRecording = (questionKey: string, onAutoAdvance?: () => void) => {
     if (!streamRef.current) return;
@@ -262,18 +318,22 @@ export function SpeakingSection({
     setQuestionElapsedS(0);
     setCurrentQuestionKey(questionKey);
     setSavedCurrentAudioDuration(null);
+    setSpeechStatus('starting');
+    delete transcriptsRef.current[questionKey]; // a re-recorded answer replaces the old one
+    liveTextRef.current = { key: questionKey, text: '' };
 
     // Live speech recognition for transcript
     const recognizer = startLiveSpeechRecognition(
-      (text, isFinal) => {
+      (text) => {
+        liveTextRef.current = { key: questionKey, text };
         setLiveTranscript(text);
-        if (isFinal) {
-          setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: text }));
-        }
+        // Keep the latest text (final + interim) for this question at all times, so no stop path loses it.
+        if (text.trim()) transcriptsRef.current[questionKey] = text.trim();
       },
       (err) => {
         setSpeechRecognitionError(err);
       },
+      (status) => setSpeechStatus(status),
     );
     recognitionRef.current = recognizer;
 
@@ -286,15 +346,14 @@ export function SpeakingSection({
       onAutoStop: (reason) => {
         void rec.stop(reason).then(async ({ blob, durationS }) => {
           setIsRecording(false);
-          if (recognizer) recognizer.stop();
+          if (recorderRef.current === rec) recorderRef.current = null;
 
-          // Save clip in IndexedDB
-          await saveSpeakingAudioBlob(attemptId, 1, questionKey, 1, blob);
-          recordingsMapRef.current[questionKey] = {
-            key: `speaking_${questionKey}`,
-            duration: durationS,
-            createdAt: Date.now(),
-          };
+          // Wait for the recogniser's trailing final result before moving on.
+          const spoken = recognizer ? await recognizer.stop() : '';
+          if (recognitionRef.current === recognizer) recognitionRef.current = null;
+          commitTranscript(questionKey, spoken || (liveTextRef.current.key === questionKey ? liveTextRef.current.text : ''));
+
+          await persistAnswerAudio(questionKey, blob, durationS);
           setSavedCurrentAudioDuration(durationS);
 
           if (onAutoAdvance) {
@@ -310,29 +369,25 @@ export function SpeakingSection({
   // Stop recording and save answer
   const stopLearnerRecording = async (questionKey: string): Promise<{ transcript: string; duration: number }> => {
     setIsRecording(false);
-    if (recognitionRef.current) {
-      recognitionRef.current.stop();
-      recognitionRef.current = null;
-    }
 
-    if (recorderRef.current) {
-      const { blob, durationS } = await recorderRef.current.stop('learner_next');
+    // Stop the recogniser FIRST and wait: the last phrase arrives only after stop().
+    const recognizer = recognitionRef.current;
+    recognitionRef.current = null;
+    const spoken = recognizer ? await recognizer.stop() : '';
+
+    let duration = savedCurrentAudioDuration || 0;
+    const rec = recorderRef.current;
+    if (rec) {
       recorderRef.current = null;
-
-      await saveSpeakingAudioBlob(attemptId, 1, questionKey, 1, blob);
-      recordingsMapRef.current[questionKey] = {
-        key: `speaking_${questionKey}`,
-        duration: durationS,
-        createdAt: Date.now(),
-      };
-
-      const finalTxt = liveTranscript.trim() || transcriptsByQuestion[questionKey] || '';
-      setTranscriptsByQuestion((prev) => ({ ...prev, [questionKey]: finalTxt }));
+      const { blob, durationS } = await rec.stop('learner_next');
+      await persistAnswerAudio(questionKey, blob, durationS);
+      duration = durationS;
       setSavedCurrentAudioDuration(durationS);
-      return { transcript: finalTxt, duration: durationS };
     }
 
-    return { transcript: liveTranscript, duration: savedCurrentAudioDuration || 0 };
+    const fallback = liveTextRef.current.key === questionKey ? liveTextRef.current.text : '';
+    commitTranscript(questionKey, spoken || fallback);
+    return { transcript: transcriptsRef.current[questionKey] ?? '', duration };
   };
 
   // Explicitly finish speaking & stop recording early for the current question
@@ -375,7 +430,7 @@ export function SpeakingSection({
     setPart1Index(0);
     const q1 = filteredPart1Questions[0] || 'Do you work or are you a student?';
     const text = `Thank you, that's fine. Now, in this first part, I'd like to ask you some questions about yourself. ${cleanText(q1)}`;
-    void playQuestionAndListen(text, `p1_q0`);
+    void playQuestionAndListen(text, `p1_q0`, mode === 'exam' ? () => advanceStepRef.current() : undefined);
   };
 
   const advancePart1 = async () => {
@@ -387,7 +442,7 @@ export function SpeakingSection({
     if (nextIdx < filteredPart1Questions.length) {
       setPart1Index(nextIdx);
       const text = cleanText(filteredPart1Questions[nextIdx]!);
-      void playQuestionAndListen(text, `p1_q${nextIdx}`);
+      void playQuestionAndListen(text, `p1_q${nextIdx}`, mode === 'exam' ? () => advanceStepRef.current() : undefined);
     } else {
       // Transition to Part 2 Intro
       setStep('part2-intro');
@@ -431,7 +486,7 @@ export function SpeakingSection({
     setStep('part2-speak');
     setSpeakingElapsedS(0);
     const cueSpeech = "All right. Remember, you have one to two minutes for this, so don't worry if I stop you. Please start speaking now.";
-    void playQuestionAndListen(cueSpeech, 'p2_speech');
+    void playQuestionAndListen(cueSpeech, 'p2_speech', mode === 'exam' ? () => advanceStepRef.current() : undefined);
   };
 
   useEffect(() => {
@@ -464,7 +519,7 @@ export function SpeakingSection({
       setStep('part2-roundoff');
       setPart2RoundoffIndex(0);
       const text = cleanText(roundOff[0]!);
-      void playQuestionAndListen(text, 'p2_roundoff_0');
+      void playQuestionAndListen(text, 'p2_roundoff_0', mode === 'exam' ? () => advanceStepRef.current() : undefined);
     } else {
       startPart3Intro();
     }
@@ -480,7 +535,7 @@ export function SpeakingSection({
     if (nextIdx < roundOff.length) {
       setPart2RoundoffIndex(nextIdx);
       const text = cleanText(roundOff[nextIdx]!);
-      void playQuestionAndListen(text, `p2_roundoff_${nextIdx}`);
+      void playQuestionAndListen(text, `p2_roundoff_${nextIdx}`, mode === 'exam' ? () => advanceStepRef.current() : undefined);
     } else {
       startPart3Intro();
     }
@@ -503,7 +558,7 @@ export function SpeakingSection({
     setPart3Index(0);
     const q1 = part3Data.questions?.[0] || 'How has technology changed this area in recent years?';
     const text = cleanText(q1);
-    void playQuestionAndListen(text, 'p3_q0');
+    void playQuestionAndListen(text, 'p3_q0', mode === 'exam' ? () => advanceStepRef.current() : undefined);
   };
 
   const advancePart3 = async () => {
@@ -516,7 +571,7 @@ export function SpeakingSection({
     if (nextIdx < questions.length) {
       setPart3Index(nextIdx);
       const text = cleanText(questions[nextIdx]!);
-      void playQuestionAndListen(text, `p3_q${nextIdx}`);
+      void playQuestionAndListen(text, `p3_q${nextIdx}`, mode === 'exam' ? () => advanceStepRef.current() : undefined);
     } else {
       completeInterview();
     }
@@ -527,18 +582,26 @@ export function SpeakingSection({
     setStep('finished');
     stopExaminerAudio();
     if (recorderRef.current) recorderRef.current.cancel();
+    if (recognitionRef.current) {
+      void recognitionRef.current.stop();
+      recognitionRef.current = null;
+    }
 
-    // Consolidate transcripts per Part
-    // Part 1
+    // Consolidate transcripts per Part from the REF (state may still be stale at this point).
+    const t = transcriptsRef.current;
     const p1Answers = (part1Data.questions || [])
-      .map((_, i) => transcriptsByQuestion[`p1_q${i}`] || '')
+      .map((_, i) => t[`p1_q${i}`] || '')
       .filter(Boolean)
       .join(' ');
-    // Part 2
-    const p2Answer = transcriptsByQuestion['p2_speech'] || '';
-    // Part 3
+    // Part 2: the long turn plus its round-off questions
+    const p2Answer = [
+      t['p2_speech'] || '',
+      ...(part2Data.questions || []).map((_, i) => t[`p2_roundoff_${i}`] || ''),
+    ]
+      .filter(Boolean)
+      .join(' ');
     const p3Answers = (part3Data.questions || [])
-      .map((_, i) => transcriptsByQuestion[`p3_q${i}`] || '')
+      .map((_, i) => t[`p3_q${i}`] || '')
       .filter(Boolean)
       .join(' ');
 
@@ -1111,6 +1174,36 @@ export function SpeakingSection({
                   }}
                 />
               </div>
+            </div>
+          )}
+
+          {/* Recording / transcription status (all modes) */}
+          {(isRecording || speechRecognitionError || audioSaveError) && (
+            <div
+              role="status"
+              style={{
+                background: speechRecognitionError || audioSaveError ? '#fffbeb' : '#f0fdf4',
+                border: `1px solid ${speechRecognitionError || audioSaveError ? '#fde68a' : '#bbf7d0'}`,
+                borderRadius: 10,
+                padding: '10px 14px',
+                marginBottom: 12,
+                fontSize: '0.84rem',
+                lineHeight: 1.5,
+                color: '#334155',
+              }}
+            >
+              {isRecording && !speechRecognitionError && (
+                <div>
+                  🎙️ Recording · {speechStatus === 'heard-speech' ? 'speech detected' : 'waiting for speech…'}
+                </div>
+              )}
+              {speechRecognitionError && (
+                <div>
+                  ⚠️ Live transcription unavailable: {describeSpeechError(speechRecognitionError)}. Your voice is still being
+                  recorded, but this answer cannot be scored until it has a transcript.
+                </div>
+              )}
+              {audioSaveError && <div>❌ {audioSaveError}</div>}
             </div>
           )}
 

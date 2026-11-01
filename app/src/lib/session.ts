@@ -9,12 +9,13 @@
 //  2. Time only ever decreases, and never by more than what the app itself observed.
 
 import { CommandError, finishAttempt, savePatch } from './attempts.ts';
-import { isValidationError, type Result, type TestData } from './types.ts';
+import { isValidationError, type Recording, type Result, type TestData } from './types.ts';
 
 export const PATCH_KEYS = [
   'responses',
   'texts',
   'speakingTexts',
+  'recordings',
   'notes',
   'marked',
   'audioPlayed',
@@ -30,6 +31,7 @@ export type Patch = {
   responses?: Record<string, string | number>;
   texts?: string[];
   speakingTexts?: string[];
+  recordings?: Record<string, Recording>;
   notes?: string[];
   marked?: string[];
   audioPlayed?: boolean[];
@@ -75,7 +77,7 @@ export class PatchError extends Error {
 }
 
 // Upstream applyPatch bounds, kept so a malformed renderer value cannot inflate the store.
-const LIMITS = { texts: 15000, speakingTexts: 6000, notes: 5000, responses: 150 } as const;
+const LIMITS = { texts: 15000, speakingTexts: 20000, notes: 5000, responses: 150 } as const;
 
 const isPlain = (v: unknown): v is Record<string, unknown> =>
   !!v && typeof v === 'object' && !Array.isArray(v);
@@ -96,6 +98,22 @@ const responseMap = (value: unknown, key: string): Record<string, string | numbe
       continue;
     }
     throw new PatchError(key, `"${id}" must be text or a choice index`);
+  }
+  return out;
+};
+
+const recordingMap = (value: unknown, key: string): Record<string, Recording> => {
+  if (!isPlain(value)) throw new PatchError(key, 'must be an object keyed by question key');
+  const out: Record<string, Recording> = {};
+  const entries = Object.entries(value).slice(0, 100);
+  for (const [id, raw] of entries) {
+    if (raw === undefined) continue;
+    if (!isPlain(raw) || typeof raw.key !== 'string' || !raw.key) {
+      throw new PatchError(key, `"${id}" must carry a storage key`);
+    }
+    const duration = typeof raw.duration === 'number' && Number.isFinite(raw.duration) ? Math.max(0, raw.duration) : 0;
+    const createdAt = typeof raw.createdAt === 'number' && Number.isFinite(raw.createdAt) ? raw.createdAt : 0;
+    out[id.slice(0, 80)] = { key: raw.key.slice(0, 300), duration, createdAt };
   }
   return out;
 };
@@ -155,6 +173,9 @@ export function buildPatch(input: unknown): Patch {
       case 'speakingTexts':
         out.speakingTexts = textArray(value, key, LIMITS.speakingTexts);
         break;
+      case 'recordings':
+        out.recordings = recordingMap(value, key);
+        break;
       case 'notes':
         out.notes = textArray(value, key, LIMITS.notes);
         break;
@@ -188,6 +209,7 @@ export function mergePatches(a: Patch, b: Patch): Patch {
   const out: Patch = {};
   if (a.responses || b.responses) out.responses = { ...(a.responses ?? {}), ...(b.responses ?? {}) };
   for (const key of ARRAY_KEYS) later(out, a, b, key);
+  if (a.recordings || b.recordings) out.recordings = { ...(a.recordings ?? {}), ...(b.recordings ?? {}) };
   if (Object.hasOwn(b, 'timer')) out.timer = b.timer;
   else if (Object.hasOwn(a, 'timer')) out.timer = a.timer;
   return out;
@@ -234,6 +256,7 @@ export function applyPatch(current: TestData, patch: Patch): TestData {
 
   if (patch.texts) next.texts = byIndex(patch.texts, current.texts);
   if (patch.speakingTexts) next.speakingTexts = byIndex(patch.speakingTexts, current.speakingTexts);
+  if (patch.recordings) next.recordings = { ...(current.recordings ?? {}), ...patch.recordings };
   if (patch.notes) next.notes = byIndex(patch.notes, current.notes ?? []);
 
   if (patch.marked) {

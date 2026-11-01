@@ -77,7 +77,7 @@ An offline-first, client-side web application for IELTS Academic preparation. Ge
 ```bash
 # Clone the repository
 git clone https://github.com/hujikol/IELTS-Practice.git
-cd IELTS_practice/app
+cd IELTS-Practice/app
 
 # Install dependencies
 pnpm install
@@ -90,16 +90,18 @@ pnpm dev
 ```
 Open `http://localhost:5173` in your browser.
 
-### Quality Verification
+### Quality Verification & Calibration
 ```bash
-# Run unit & integration tests (477 tests)
+# Run unit & integration tests (494 tests)
 pnpm test
 
 # Run TypeScript typecheck
 pnpm run typecheck
 
-# Run ESLint
-pnpm run lint
+# Run Writing calibration harness against benchmark human-marked fixtures
+node scripts/calibrate-writing.mjs --dry-run
+# or with active AI provider:
+# node scripts/calibrate-writing.mjs --runs=3
 
 # Production build
 pnpm run build
@@ -127,14 +129,21 @@ IELTS_practice/
 │   │   │       └── confirmation-modal.tsx# Accessible confirmation dialogs
 │   │   └── lib/
 │   │       ├── speaking-recorder.ts      # Voice recording, AnalyserNode meter, VAD & IndexedDB
+│   │       ├── stt-engine.ts             # Audio STT (/audio/transcriptions) & Web Audio pause analysis
 │   │       ├── attempts.ts               # Local attempt storage & sanitization
 │   │       ├── bands.ts                  # IELTS band tables & CEFR concordance
 │   │       ├── assessment-coordinator.ts # Report compilation & objective scoring
+│   │       ├── writing-score.ts          # Calibrated Writing scoring orchestrator & quote verification
+│   │       ├── writing-rubric.ts         # Versioned rubric anchors (w-1.0.0) for Task 1 & 2
+│   │       ├── writing-checks.ts         # Deterministic pre-checks (length caps, off-topic detection)
+│   │       ├── score-cache.ts            # Deterministic scoring cache (prompt, text, rubric, model)
 │   │       ├── scoring.ts                # Diagnostic aggregation & weakness ranking
 │   │       ├── material.ts               # Schema validation & test data structures
-│   │       ├── providers.ts              # LLM integration & prompt orchestration
+│   │       ├── providers.ts              # LLM integration (chat & dedicated scoring)
 │   │       └── types.ts                  # Domain models & utility functions
-│   ├── tests/                            # 477 automated unit & integration tests
+│   ├── scripts/
+│   │   └── calibrate-writing.mjs         # Writing calibration harness across benchmark band fixtures
+│   ├── tests/                            # 494 automated unit & integration tests
 │   └── package.json
 └── README.md
 ```

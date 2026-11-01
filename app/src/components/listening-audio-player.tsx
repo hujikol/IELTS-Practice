@@ -15,6 +15,8 @@ import {
   randomizeVoiceMap,
   voiceDisplayName,
   voiceForPart,
+  resolveTurnSpeaker,
+  cleanScriptTurnText,
   type VoiceMapEntry,
 } from '../lib/voices.ts';
 
@@ -173,7 +175,12 @@ export function ListeningAudioPlayer({
       const voiceId = voiceForPart(activeVoiceMap, partNumber, voiceType);
       const speakerName = voiceDisplayName(voiceId);
       setCurrentSpeakerInfo({
-        label: voiceType === 'narrator' ? 'Narrator' : voiceType === 'woman' ? 'Speaker 1 (Woman)' : 'Speaker 2 (Man)',
+        label:
+          voiceType === 'narrator'
+            ? '📢 Instructor / Narrator'
+            : voiceType === 'woman'
+              ? '👩 Speaker 1 (Woman)'
+              : '👨 Speaker 2 (Man)',
         voiceName: speakerName,
       });
 
@@ -328,17 +335,10 @@ export function ListeningAudioPlayer({
       }
 
       // 3. Spoken dialogue or narrator line
-      const text = event.text || '';
-      const speakerType =
-        event.type === 'narrator'
-          ? 'narrator'
-          : event.speaker === 'woman' || /female|_f_/i.test(event.speaker_id || '')
-            ? 'woman'
-            : event.speaker === 'man' || /male|_m_/i.test(event.speaker_id || '')
-              ? 'man'
-              : 'narrator';
+      const cleanText = cleanScriptTurnText(event.text || '');
+      const speakerType = resolveTurnSpeaker(event.speaker, event.type, event.speaker_id, lineIdx);
 
-      playSpeechLine(text, speakerType, () => {
+      playSpeechLine(cleanText, speakerType, () => {
         if (!isPausedRef.current) {
           playNextTurn(lineIdx + 1);
         }

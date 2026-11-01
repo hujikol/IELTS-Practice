@@ -30,6 +30,8 @@ import {
 } from './assessment-ai.ts';
 import { loadProviderConfig, type ProviderConfig } from './providers.ts';
 import { isWritingAttempted, isSpeakingAttempted } from './attempts.ts';
+import { getSpeakingAudioBlob } from './speaking-recorder.ts';
+import { transcribeAudioBlobWithApi, type WordTimestamp } from './stt-engine.ts';
 import type { AttemptRecord, Question } from './types.ts';
 
 /**
@@ -107,21 +109,23 @@ export function buildAttemptCapture(record: AttemptRecord): Attempt {
     prompt_id: `w-task-${idx + 1}`,
     text: t.texts[idx] || '',
     word_count: t.texts[idx]?.trim() ? t.texts[idx]!.trim().split(/\s+/).length : 0,
-    duration_s: 1200,
+    duration_s: 0,
   }));
 
   // Speaking
-  const speakingParts = t.speaking.map((s, idx) => ({
-    part: (idx + 1) as 1 | 2 | 3,
-    question_id: `s-part-${idx + 1}`,
-    audio_url: '',
-    transcript: t.speakingTexts[idx] || '',
-    words: (t.speakingTexts[idx] || '')
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((w, i) => ({ w, start: i * 0.4, end: (i + 1) * 0.4, conf: 0.95 })),
-    duration_s: 180,
-  }));
+  const speakingParts = t.speaking.map((s, idx) => {
+    const partPrefix = `p${idx + 1}_`;
+    const partRecordings = Object.entries(t.recordings || {}).filter(([k]) => k.startsWith(partPrefix));
+    const totalDuration = partRecordings.reduce((sum, [, r]) => sum + (r.duration || 0), 0);
+    return {
+      part: (idx + 1) as 1 | 2 | 3,
+      question_id: `s-part-${idx + 1}`,
+      audio_url: '',
+      transcript: t.speakingTexts[idx] || '',
+      words: [],
+      duration_s: Math.round(totalDuration),
+    };
+  });
 
   return {
     attempt_id: record.id,
@@ -245,54 +249,17 @@ export async function generateFinalReport(
 
       writingPromises.push(
         (async () => {
-          if (!skipRemoteAI && config.enabled && wordCount >= 30) {
-            const assessment = await scoreWritingTaskWithAI(
-              taskNumber,
-              taskDef.prompt,
-              taskDef.visual ? JSON.stringify(taskDef.visual) : null,
-              ['reported major trends', 'provided overview', 'compared key metrics'],
-              userText,
-              1200,
-              config,
-            );
-            return { taskNumber, taskDef, userText, assessment };
-          } else {
-            const targetMin = taskDef.minimum || (taskNumber === 1 ? 150 : 250);
-            const isUnderLength = wordCount < targetMin * 0.75;
-            const baseBand = isUnderLength ? 5.0 : 6.5;
-
-            const assessment = {
-              task: taskNumber as 1 | 2,
-              confidence: 'low' as const,
-              band: baseBand,
-              criteria: {
-                task_response: {
-                  band: baseBand,
-                  evidence: [],
-                  next_band_gap: isUnderLength ? `Write at least ${targetMin} words to fulfill task requirements.` : 'Develop supporting details further.',
-                },
-                coherence: {
-                  band: baseBand,
-                  evidence: [],
-                  next_band_gap: 'Use a wider range of cohesive devices between paragraphs.',
-                },
-                lexical: {
-                  band: baseBand,
-                  evidence: [],
-                  next_band_gap: 'Incorporate less common lexical items and collocations.',
-                },
-                grammar: {
-                  band: baseBand,
-                  evidence: [],
-                  next_band_gap: 'Use a variety of complex sentence structures with grammatical accuracy.',
-                },
-              },
-              strengths: wordCount >= targetMin ? [`Sufficient length (${wordCount} words) meeting the required minimum.`] : [],
-              priority_fixes: isUnderLength ? [`Increase essay length to meet the ${targetMin}-word minimum.`] : [],
-              errors: [],
-            };
-            return { taskNumber, taskDef, userText, assessment };
-          }
+          const effectiveConfig = skipRemoteAI ? { ...config, enabled: false } : config;
+          const assessment = await scoreWritingTaskWithAI(
+            taskNumber,
+            taskDef.prompt,
+            taskDef.visual ? JSON.stringify(taskDef.visual) : null,
+            ['reported major trends', 'provided overview', 'compared key metrics'],
+            userText,
+            0,
+            effectiveConfig,
+          );
+          return { taskNumber, taskDef, userText, assessment };
         })(),
       );
     }
@@ -304,16 +271,16 @@ export async function generateFinalReport(
   const speakingPromises: Promise<{
     partNum: 1 | 2 | 3;
     transcript: string;
+    realWords?: WordTimestamp[];
+    unscoredReason?: string;
     assessment: Awaited<ReturnType<typeof scoreSpeakingWithAI>>;
   } | null>[] = [];
 
   if (speakingAttempted && speakCount > 0) {
     for (let idx = 0; idx < speakCount; idx++) {
       const partNum = (idx + 1) as 1 | 2 | 3;
-      const transcript = testData.speakingTexts?.[idx] || '';
-      const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
-
-      if (wordCount < 5) continue;
+      const initialTranscript = testData.speakingTexts?.[idx] || '';
+      const partRecordings = Object.entries(testData.recordings || {}).filter(([k]) => k.startsWith(`p${partNum}_`));
 
       const partDef = testData.speaking[idx];
       const partPrompt =
@@ -324,50 +291,66 @@ export async function generateFinalReport(
 
       speakingPromises.push(
         (async () => {
-          if (!skipRemoteAI && config.enabled && wordCount >= 10) {
-            const assessment = await scoreSpeakingWithAI(
-              partNum,
-              partPrompt,
-              transcript,
-              partNum === 2 ? 120 : 60,
-              config,
-            );
-            return { partNum, transcript, assessment };
-          } else {
-            const targetWords = partNum === 2 ? 140 : 60;
-            const baseBand = wordCount >= targetWords ? 6.5 : wordCount >= 30 ? 6.0 : wordCount >= 15 ? 5.0 : 4.0;
-            const assessment = {
-              part: partNum,
-              band: baseBand,
-              confidence: 'low' as const,
-              criteria: {
-                FC: { band: baseBand, comment: `Spoke ${wordCount} words.`, next_band_gap: 'Maintain fluency with fewer pauses.' },
-                LR: { band: baseBand, comment: 'Basic range of lexical items used.', next_band_gap: 'Incorporate idiomatic collocations.' },
-                GRA: { band: baseBand, comment: 'Adequate sentence construction.', next_band_gap: 'Introduce more complex structures.' },
-                PR: { band: baseBand, comment: 'Generally intelligible rhythm.', next_band_gap: 'Focus on syllable stress and sentence intonation.' },
-              },
-              highlights: [
-                { span: 'um, like', type: 'filler' as const, note: 'Avoid hesitation fillers during transitions.' },
-              ],
-              improved_answer: transcript
-                ? `In response to this prompt, I would emphasize that consistent practice and clear structural organization are paramount for fluent communication.`
-                : undefined,
-              vocab_upgrades: [
-                { original: 'very good', upgraded: 'exceptionally beneficial', context: 'qualitative description' },
-                { original: 'big problem', upgraded: 'formidable impediment', context: 'challenge description' },
-                { original: 'I think', upgraded: 'from my perspective', context: 'opinion framing' },
-              ],
-              cue_card_outline: partNum === 2 ? [
-                'Introduction: Clearly introduce the topic/experience',
-                'Context: When, where, and with whom',
-                'Key details: What happened and why it mattered',
-                'Personal reflection: The lasting impact on you',
-              ] : undefined,
-              strengths: wordCount >= 30 ? [`Spoke ${wordCount} words addressing the prompt.`] : ['Attempted the interview topic.'],
-              priority_fixes: ['Expand detail and vocabulary diversity.'],
-            };
-            return { partNum, transcript, assessment };
+          let transcript = initialTranscript;
+          const realWords: WordTimestamp[] = [];
+          const effectiveConfig = skipRemoteAI ? { ...config, enabled: false } : config;
+          const duration = Math.round(partRecordings.reduce((sum, [, r]) => sum + (r.duration || 0), 0)) || (partNum === 2 ? 120 : 60);
+
+          // If transcript is missing/empty but recordings exist, attempt audio transcription if AI is enabled in browser
+          if (transcript.trim().split(/\s+/).filter(Boolean).length < 5 && partRecordings.length > 0 && !skipRemoteAI && config.enabled && typeof window !== 'undefined') {
+            try {
+              const transcribedParts: string[] = [];
+              for (const [, rec] of partRecordings) {
+                if (rec.key) {
+                  const blob = await getSpeakingAudioBlob(rec.key);
+                  if (blob) {
+                    const sttRes = await transcribeAudioBlobWithApi(blob, config);
+                    if (sttRes.text) transcribedParts.push(sttRes.text);
+                    if (sttRes.words?.length) realWords.push(...sttRes.words);
+                  }
+                }
+              }
+              if (transcribedParts.length > 0) {
+                transcript = transcribedParts.join(' ');
+              }
+            } catch (err) {
+              console.warn(`[IELTS Studio] Audio transcription failed for Part ${partNum}:`, err);
+            }
           }
+
+          const wordCount = transcript.trim().split(/\s+/).filter(Boolean).length;
+          if (wordCount < 5) {
+            return {
+              partNum,
+              transcript,
+              realWords,
+              unscoredReason: partRecordings.length > 0 ? 'no_transcript' : 'not_attempted',
+              assessment: {
+                part: partNum,
+                band: null,
+                status: 'unscored' as const,
+                unscored_reason: partRecordings.length > 0 ? 'no_transcript' : 'not_attempted',
+                criteria: {},
+                highlights: [],
+                vocab_upgrades: [],
+                strengths: [],
+                priority_fixes: [],
+                confidence: 'low' as const,
+                notes: partRecordings.length > 0
+                  ? 'Audio recordings were captured, but no speech transcript was generated.'
+                  : 'Speaking part was not attempted or had fewer than 5 words.',
+              },
+            };
+          }
+
+          const assessment = await scoreSpeakingWithAI(
+            partNum,
+            partPrompt,
+            transcript,
+            duration,
+            effectiveConfig,
+          );
+          return { partNum, transcript, realWords, assessment };
         })(),
       );
     }
@@ -399,35 +382,31 @@ export async function generateFinalReport(
 
   for (const item of writingResolved) {
     if (!item) continue;
-    const { taskNumber, userText, assessment } = item;
-    if (taskNumber === 1) task1Band = assessment.band;
-    if (taskNumber === 2) task2Band = assessment.band;
-    if (assessment.confidence !== 'low') hasAiWritingAssessment = true;
+    const { taskNumber, assessment } = item;
+    if (assessment.status === 'scored' && assessment.band !== null) {
+      if (taskNumber === 1) task1Band = assessment.band;
+      if (taskNumber === 2) task2Band = assessment.band;
+      if (assessment.confidence !== 'low') hasAiWritingAssessment = true;
+    }
 
     writingTasksResults.push({
       task: taskNumber,
       band: assessment.band,
-      criteria: assessment.criteria,
+      status: assessment.status,
+      unscored_reason: assessment.unscored_reason,
+      criteria: assessment.criteria as Record<string, { band: number; evidence: { quote: string; comment: string }[]; next_band_gap: string }>,
       errors: assessment.errors,
       strengths: assessment.strengths,
       priority_fixes: assessment.priority_fixes,
-      model_answer:
-        taskNumber === 1
-          ? 'The provided visual illustrates significant transformations over the measured period. Notably, the primary category experienced an initial surge, culminating at a peak before plateauing. In contrast, subsidiary elements remained relatively stable, displaying minor oscillations without significant deviation.'
-          : 'In modern society, the debate regarding this subject has garnered substantial attention. Proponents argue that strategic implementation yields tangible benefits, whereas critics caution against unintended repercussions. On balance, a balanced framework offers the most viable path forward.',
-      structure_comparison: {
-        learner_intro: userText.split('\n\n')[0] || userText.slice(0, 120),
-        model_intro: 'Paraphrased the original prompt and articulated a clear overview/thesis statement.',
-        learner_body: userText.split('\n\n').slice(1),
-        model_body: ['Detailed comparative analysis with relevant statistical evidence.', 'Secondary trends highlighted with clear cohesive devices.'],
-      },
     });
   }
 
   if (task1Band !== null && task2Band !== null) {
     writingBand = calculateWritingBand(task1Band, task2Band);
-  } else {
+  } else if (testData.scope === 'writing') {
     writingBand = task1Band ?? task2Band ?? null;
+  } else {
+    writingBand = null;
   }
 
   // Assemble Speaking Results
@@ -443,28 +422,33 @@ export async function generateFinalReport(
   for (const item of speakingResolved) {
     if (!item) continue;
     const { partNum, transcript, assessment } = item;
-    validSpeakingBands.push(assessment.band);
-    if (assessment.confidence !== 'low') hasAiSpeakingAssessment = true;
+    if (assessment.status === 'scored' && assessment.band !== null) {
+      validSpeakingBands.push(assessment.band);
+      if (assessment.confidence !== 'low') hasAiSpeakingAssessment = true;
 
-    sumFC += assessment.criteria.FC?.band ?? assessment.band;
-    sumLR += assessment.criteria.LR?.band ?? assessment.band;
-    sumGRA += assessment.criteria.GRA?.band ?? assessment.band;
-    sumPR += assessment.criteria.PR?.band ?? assessment.band;
+      if (assessment.criteria.FC?.band !== undefined) sumFC += assessment.criteria.FC.band;
+      if (assessment.criteria.LR?.band !== undefined) sumLR += assessment.criteria.LR.band;
+      if (assessment.criteria.GRA?.band !== undefined) sumGRA += assessment.criteria.GRA.band;
+      if (assessment.criteria.PR?.band !== undefined) sumPR += assessment.criteria.PR.band;
+    }
 
-    const words = transcript
-      .split(/\s+/)
-      .filter(Boolean)
-      .map((w, i) => ({ w, start: i * 0.4, end: (i + 1) * 0.4, conf: 0.95 }));
-    const metrics = calculateSpeechMetrics(words, 120, partNum === 2 ? 120 : 60);
+    const partRecordings = Object.entries(testData.recordings || {}).filter(([k]) => k.startsWith(`p${partNum}_`));
+    const realDuration = Math.round(partRecordings.reduce((sum, [, r]) => sum + (r.duration || 0), 0)) || (partNum === 2 ? 120 : 60);
+    // Real word timestamps from Whisper/STT; null if not yet measured
+    const metrics = calculateSpeechMetrics(item.realWords || [], realDuration, partNum === 2 ? 120 : 60);
 
     speakingPartsResults.push({
       part: partNum,
       transcript: transcript,
-      metrics,
+      status: assessment.band !== null ? 'scored' : 'unscored',
+      unscored_reason: item.unscoredReason || (assessment.band === null ? 'ai_disabled' : undefined),
+      metrics: metrics ?? undefined,
       highlights: assessment.highlights,
       improved_answer: assessment.improved_answer,
       vocab_upgrades: assessment.vocab_upgrades,
       cue_card_outline: assessment.cue_card_outline,
+      strengths: assessment.strengths,
+      priority_fixes: assessment.priority_fixes,
     });
   }
 
@@ -611,19 +595,40 @@ export async function generateFinalReport(
     modules: {
       listening: { raw: listeningRaw, of: listeningKeyItems.length || 40, band: listeningBand },
       reading: { raw: readingRaw, of: readingKeyItems.length || 40, band: readingBand },
-      writing: writingAttempted && writingBand !== null
+      writing: writingAttempted
         ? {
             band: writingBand,
             task1: task1Band,
             task2: task2Band,
-            criteria: {
-              TR_TA: writingTasksResults[0]?.criteria?.task_response?.band ?? 6.0,
-              CC: writingTasksResults[0]?.criteria?.coherence?.band ?? 6.0,
-              LR: writingTasksResults[0]?.criteria?.lexical?.band ?? 6.0,
-              GRA: writingTasksResults[0]?.criteria?.grammar?.band ?? 6.0,
-            },
+            criteria: (() => {
+              const t1 = writingTasksResults.find((t) => t.task === 1)?.criteria;
+              const t2 = writingTasksResults.find((t) => t.task === 2)?.criteria;
+              const tr1 = t1?.task_response?.band;
+              const tr2 = t2?.task_response?.band;
+              const cc1 = t1?.coherence?.band;
+              const cc2 = t2?.coherence?.band;
+              const lr1 = t1?.lexical?.band;
+              const lr2 = t2?.lexical?.band;
+              const gra1 = t1?.grammar?.band;
+              const gra2 = t2?.grammar?.band;
+
+              const avg = (v1?: number, v2?: number) => {
+                if (v1 !== undefined && v2 !== undefined) return roundToHalfBand((v1 + v2 * 2) / 3);
+                return v1 ?? v2;
+              };
+
+              const tr = avg(tr1, tr2);
+              const cc = avg(cc1, cc2);
+              const lr = avg(lr1, lr2);
+              const gra = avg(gra1, gra2);
+
+              if (tr !== undefined && cc !== undefined && lr !== undefined && gra !== undefined) {
+                return { TR_TA: tr, CC: cc, LR: lr, GRA: gra };
+              }
+              return undefined;
+            })(),
             confidence: config.enabled && !skipRemoteAI && hasAiWritingAssessment ? 'medium' : 'low',
-            status: 'assessed',
+            status: writingBand !== null ? 'assessed' : 'pending',
           }
         : {
             band: null,
@@ -632,12 +637,12 @@ export async function generateFinalReport(
             confidence: 'low',
             status: 'unattempted',
           },
-      speaking: speakingAttempted && speakingBand !== null
+      speaking: speakingAttempted
         ? {
             band: speakingBand,
-            criteria: speakingCriteria,
+            criteria: validSpeakingBands.length > 0 ? speakingCriteria : undefined,
             confidence: config.enabled && !skipRemoteAI && hasAiSpeakingAssessment ? 'medium' : 'low',
-            status: 'assessed',
+            status: speakingBand !== null ? 'assessed' : 'pending',
           }
         : {
             band: null,
@@ -647,6 +652,7 @@ export async function generateFinalReport(
     },
     aggregates,
     weakness_profile: weaknessProfile,
+    rubric_version: 'w-1.0.0',
     review: {
       listening: reviewListening,
       reading: reviewReading,

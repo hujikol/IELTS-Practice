@@ -1297,9 +1297,10 @@ export function Player({
             speakingParts={attempt.data.speaking || []}
             initialMode={attempt.mode === 'timed' ? 'timed' : 'untimed'}
             initialNotes={data.notes}
-            onSaveAnswers={(transcripts) => {
+            onSaveAnswers={(transcripts, recordings) => {
               edit({
                 speakingTexts: transcripts,
+                recordings,
               });
             }}
             onFinish={() => {
